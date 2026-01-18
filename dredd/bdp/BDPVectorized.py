@@ -4,15 +4,44 @@ import jax.numpy as jnp
 import jax.random as jr
 from jax import jit
 import time
+from pydantic import BaseModel, Field, validator
 
+class BDPVectorized(BaseModel):
+    K: int = 0
+    NUM_PAIRS: int = 0
+    i_all: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
+    j_all: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
+    alpha_t: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
+    frequency: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
+    key: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
 
-class BDPVectorized:
-    def __init__(self, K: int):
-        self.K = K
-        self.NUM_PAIRS = K * (K - 1) // 2
-        self.key = jr.key(int(time.time_ns()))
-        self.i_all, self.j_all = jnp.triu_indices(K, k=1)
-        self.alpha_t = jnp.ones(K)
+    class Config:
+        json_encoders = {
+            jnp.ndarray: lambda v: v.astype(float).tolist(),
+        }
+        arbitrary_types_allowed = True
+
+    @validator("alpha_t", pre=True, always=True)
+    def ensure_jnp_array_float(cls, v):
+        return jnp.array(v, dtype=jnp.float32)
+
+    @validator("i_all", "j_all", "frequency", pre=True, always=True)
+    def ensure_jnp_array_int(cls, v):
+        return jnp.array(v, dtype=jnp.int32)
+
+    @validator("key", pre=True, always=True)
+    def ensure_jnp_array_key(cls, v):
+        return jnp.array(v, dtype=jnp.uint32)
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.K != 0: # don't reset any of the state if loaded from snapshot
+            return
+
+        self.NUM_PAIRS = self.K * (self.K - 1) // 2
+        self.key = jr.PRNGKey(int(time.time_ns()))
+        self.i_all, self.j_all = jnp.triu_indices(self.K, k=1)
+        self.alpha_t = jnp.ones(self.K)
         self.frequency = jnp.zeros(self.K)
 
     def get_alphas(self) -> np.ndarray:
@@ -28,8 +57,8 @@ class BDPVectorized:
         self.key, subkey = jr.split(self.key)
 
         next_idx = jr.choice(subkey, self.NUM_PAIRS, p=distribution)
-        next_i = self.i_all[next_idx].astype(int)
-        next_j = self.j_all[next_idx].astype(int)
+        next_i = int(self.i_all[next_idx].astype(int))
+        next_j = int(self.j_all[next_idx].astype(int))
         self.frequency = self.frequency.at[next_i].add(1)
         self.frequency = self.frequency.at[next_j].add(1)
 

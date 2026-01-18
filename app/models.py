@@ -1,15 +1,14 @@
 from typing import List, Optional, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class Project(BaseModel):
     project_name: str
-    link_to_devpost: str = Field(alias="devpost_link")
+    devpost_link: str
     table_num: str
     project_id: int
     tracks: str
 
-    # class.model_dump() => api response format
 
 class GenericResponseModel(BaseModel):
     status_code: int
@@ -23,11 +22,15 @@ class PairResponseModel(GenericResponseModel):
 
 class RankingsResponseModel(GenericResponseModel):
     is_started: bool
-    projects: List[Project]
-    convergence: List[List[float]]
+    rankings: List[Project]
 
 
 class ComparisonInputModel(BaseModel):
     uuid: str
     project_ids: Tuple[int, int]
     winner_id: int
+
+
+class PairRequestModel(BaseModel):
+    uuid: str
+    force: bool = False

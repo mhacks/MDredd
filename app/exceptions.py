@@ -12,11 +12,13 @@ class JudgingAlreadyStartedException(RuntimeError):
         self.message = message
         super().__init__(self.message)
 
+
 class JudgeDoesNotOwnPairException(RuntimeError):
 
     def __init__(self, message="This Judge does not own the pair!"):
         self.message = message
         super().__init__(self.message)
+
 
 class IncorrectPairFormatException(RuntimeError):
 

@@ -1,8 +1,9 @@
-__pycache__
-results
-.venv/
-.git/
-*.log
+.git
 .DS_store
-saves
+
+.venv
+__pycache__
+
+*.log
 *.db
+*.csv

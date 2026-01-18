@@ -1,6 +1,9 @@
-- debounce regeneration
-- vectorized r_tilde
-- rename some of the methods to make sense (ie r_tilde = reward)
-- refer to notion doc for specifics
-- get rid of the extra polymorphism
-- keep the SRP real
+# MDredd
+
+⚠️ This repository is under heavy developement and tailored heavily for MHacks.
+
+This is a realistic pair-wise judging algorithm API based on [Bayesian Decision Process for Cost-Efficient Dynamic Ranking via Crowdsourcing](https://www.jmlr.org/papers/v17/16-066.html).
+
+<u>**Features:**</u>
+- Just In Time via JAX
+- Crash resistance through a custom Write-Ahead Logging system

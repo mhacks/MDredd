@@ -2,21 +2,23 @@ import logging
 from typing import Tuple
 
 from fastapi.responses import JSONResponse
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import numpy as np
+import threading
 
 from app.exceptions import IncorrectPairFormatException, JudgeDoesNotOwnPairException, JudgingAlreadyStartedException, JudgingNotStartedException
-from app.adapters import JudgeManager, ProjectAdapter
-from app.models import ComparisonInputModel, GenericResponseModel, PairResponseModel, Project, RankingsResponseModel
+from app.adapters import SnapshotAdapter, ProjectAdapter, LogAdapter
+from app.models import ComparisonInputModel, GenericResponseModel, PairResponseModel, Project, RankingsResponseModel, PairRequestModel
 from app import constants
-
 from dredd.bdp import BDPVectorized
 
 logger = logging.getLogger("uvicorn")
-
 app = FastAPI()
+
+snapshot_lock = threading.Lock()
+snapshot_counter = 0
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +31,17 @@ app.add_middleware(
 class JudgingAPI:
     def __init__(self):
         self.enabled = False
+        self.project_adapter = ProjectAdapter()
+        self.snapshot_manager = SnapshotAdapter()
+        self.log_manager = LogAdapter()
+
+        self.project_adapter.load_projects(None)
+        snapshot: Tuple[int, BDPVectorized] = self.snapshot_manager.load_snapshot()
+        timestamp, bdp_instance = snapshot
+        self.BDP = bdp_instance
+        if self.BDP:
+            self.log_manager.replay(timestamp, self.BDP, self.snapshot_manager.judge_map) # replay any logs
+            self.enabled = True
 
     def get_enabled(self) -> bool:
         return self.enabled
@@ -36,11 +49,12 @@ class JudgingAPI:
     def start(self, projects_csv: UploadFile | None = None):
         if self.enabled:
             raise JudgingAlreadyStartedException()
+        
+        self.project_adapter.load_projects(projects_csv)
         if projects_csv is not None:
-            self.project_adapter = ProjectAdapter(projects_csv)
-            self.judge_manager = JudgeManager()
-
-        self.BDP = BDPVectorized(len(self.project_adapter))
+            self.snapshot_manager.clear()
+            self.log_manager.clear()
+            self.BDP = BDPVectorized(K=len(self.project_adapter.projects))
         self.enabled = True
 
     def resume(self):
@@ -57,8 +71,8 @@ class JudgingAPI:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not force and judge in self.judge_manager.judge_map:
-            i, j = self.judge_manager.judge_map[judge]
+        if not force and judge in self.snapshot_manager.judge_map:
+            i, j = self.snapshot_manager.judge_map[judge]
             return (self.project_adapter.get_project_from_id(i), self.project_adapter.get_project_from_id(j))
 
         i, j = self.BDP.get_next_pair()
@@ -66,16 +80,16 @@ class JudgingAPI:
         project_j = self.project_adapter.get_project_from_id(j)
         pair = (project_i, project_j)
 
-        self.judge_manager.judge_map[judge] = (i, j)
-
+        self.snapshot_manager.judge_map[judge] = (i, j)
+        
         return pair
 
     def submit_pair(self, judge: str, left_project_id: int, right_project_id: int, winner_id: int):
         if not self.enabled:
             raise JudgingNotStartedException()
         
-        if not self.judge_manager.verify_judge_assignment(judge, left_project_id, right_project_id):
-            logger.info(self.judge_manager.judge_map[judge])
+        if not self.snapshot_manager.verify_judge_assignment(judge, left_project_id, right_project_id):
+            logger.info(self.snapshot_manager.judge_map[judge])
             logger.info((left_project_id, right_project_id))
             raise JudgeDoesNotOwnPairException()
 
@@ -87,25 +101,41 @@ class JudgingAPI:
             right_project_id,
             winner_id
         )
-        del self.judge_manager.judge_map[judge]
+
+        del self.snapshot_manager.judge_map[judge]
 
     def get_rankings(self):
-        if hasattr(self, "BDP") and self.project_adapter and self.judge_manager: # fix
+        if self.enabled:
             sorted_indices = np.flip(np.argsort(self.BDP.get_alphas()))
             return [self.project_adapter.projects[i] for i in sorted_indices]
         else:
             raise JudgingNotStartedException()
 
-
 api = JudgingAPI()
+
+@app.middleware("http")
+def snapshot(request, call_next):
+    if request.url.path in ["/"]:
+        return call_next(request)
+
+    if api.get_enabled():
+        with snapshot_lock:
+            global snapshot_counter
+            snapshot_counter += 1
+
+            if snapshot_counter >= constants.SNAPSHOT_INTERVAL:
+                snapshot_counter = 0
+                print("Taking snapshot")
+                api.snapshot_manager.snapshot(api.BDP)
+            
+    return call_next(request)
 
 @app.get("/")
 def read_root():
     return {"message": "Hello World"}
 
-
 @app.post("/start", response_model=GenericResponseModel)
-def start_judging(projects_csv: UploadFile):
+def start_judging(projects_csv: UploadFile | None = None):
     logger.info("Got request to start judging.")
     try:
         api.start(projects_csv)
@@ -156,12 +186,17 @@ def resume_judging():
 
 
 @app.get("/pair", response_model=PairResponseModel)
-def get_pair(uuid: str, force: bool = False):
+def get_pair(pair_request: PairRequestModel = Depends()):
+    uuid = pair_request.uuid
+    force = pair_request.force == True
+
     logger.info(f"Got request for pair by {uuid} (force={force}).")
     try:
+        pair = api.get_pair(uuid, force)
+        api.log_manager.log(pair_request)
         return {
             "is_started": api.get_enabled(),
-            "pair": api.get_pair(uuid, force),
+            "pair": pair,
             "message": "Successfully got pair!",
             "status_code": 200
         }
@@ -185,6 +220,7 @@ def submit_comparison(comparison_request: ComparisonInputModel):
             comparison_request.project_ids[1],
             comparison_request.winner_id
         )
+        api.log_manager.log(comparison_request)
         return {
             "message": "Successfully submitted pair!",
             "status_code": 200
@@ -202,21 +238,19 @@ def submit_comparison(comparison_request: ComparisonInputModel):
 @app.get("/rankings", response_model=RankingsResponseModel)
 def get_rankings():
     try:
-        projects, convergence_history = api.get_rankings()
+        rankings = api.get_rankings()
         return {
             "message": "Successfully got rankings",
             "status_code": 200,
             "is_started": True,
-            "projects": projects,
-            "convergence": convergence_history
+            "rankings": rankings
         }
     except JudgingNotStartedException:
         return {
             "message": "Judging has never been started!",
             "status_code": 409,
             "is_started": False,
-            "projects": [],
-            "convergence": [],
+            "rankings": []
         }
     except Exception as e:
         logger.error(e)
