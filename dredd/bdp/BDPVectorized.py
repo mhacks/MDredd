@@ -4,45 +4,45 @@ import jax.numpy as jnp
 import jax.random as jr
 from jax import jit
 import time
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, field_validator, model_validator
+
+FIELD_DTYPES = {
+    "alpha_t": jnp.float32,
+    "frequency": jnp.int32,
+    "key": jnp.uint32,
+}
+
 
 class BDPVectorized(BaseModel):
-    K: int = 0
-    NUM_PAIRS: int = 0
-    i_all: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
-    j_all: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
-    alpha_t: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
-    frequency: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
-    key: jnp.ndarray = Field(default_factory=lambda: jnp.array([]))
+    K: int
+    alpha_t: jnp.ndarray
+    frequency: jnp.ndarray
+    key: jnp.ndarray
 
     class Config:
-        json_encoders = {
-            jnp.ndarray: lambda v: v.astype(float).tolist(),
-        }
+        json_encoders = {jnp.ndarray: lambda v: v.tolist()}
         arbitrary_types_allowed = True
 
-    @validator("alpha_t", pre=True, always=True)
-    def ensure_jnp_array_float(cls, v):
-        return jnp.array(v, dtype=jnp.float32)
+    @model_validator(mode="before")
+    def initialize_missing(cls, values):
+        K = values.get("K", 0)
 
-    @validator("i_all", "j_all", "frequency", pre=True, always=True)
-    def ensure_jnp_array_int(cls, v):
-        return jnp.array(v, dtype=jnp.int32)
+        defaults = {
+            "alpha_t": lambda: jnp.ones(K, dtype=jnp.float32),
+            "frequency": lambda: jnp.zeros(K, dtype=jnp.int32),
+            "key": lambda: jr.PRNGKey(int(time.time_ns())),
+        }
 
-    @validator("key", pre=True, always=True)
-    def ensure_jnp_array_key(cls, v):
-        return jnp.array(v, dtype=jnp.uint32)
+        for field, default_fn in defaults.items():
+            if not values.get(field):
+                values[field] = default_fn()
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        if self.K != 0: # don't reset any of the state if loaded from snapshot
-            return
+        return values
 
-        self.NUM_PAIRS = self.K * (self.K - 1) // 2
-        self.key = jr.PRNGKey(int(time.time_ns()))
-        self.i_all, self.j_all = jnp.triu_indices(self.K, k=1)
-        self.alpha_t = jnp.ones(self.K)
-        self.frequency = jnp.zeros(self.K)
+    @field_validator(*FIELD_DTYPES.keys(), mode="before")
+    def ensure_correct_dtype(cls, v, info):
+        dtype = FIELD_DTYPES[info.field_name]
+        return jnp.array(v, dtype=dtype)
 
     def get_alphas(self) -> np.ndarray:
         return np.array(self.alpha_t)
@@ -52,13 +52,15 @@ class BDPVectorized(BaseModel):
         self.alpha_t = BDPVectorized.MM(self.alpha_t, i, j, Y_ij)
 
     def get_next_pair(self, temp: float = 1.0) -> Tuple[int, int]:
-        pair_frequency = self.frequency[self.i_all] + self.frequency[self.j_all]
+        i_all, j_all = jnp.triu_indices(self.K, k=1)
+        pair_frequency = self.frequency[i_all] + self.frequency[j_all]
         distribution = BDPVectorized.softmax(-pair_frequency, temp)
         self.key, subkey = jr.split(self.key)
 
-        next_idx = jr.choice(subkey, self.NUM_PAIRS, p=distribution)
-        next_i = int(self.i_all[next_idx].astype(int))
-        next_j = int(self.j_all[next_idx].astype(int))
+        NUM_PAIRS = self.K * (self.K - 1) // 2
+        next_idx = jr.choice(subkey, NUM_PAIRS, p=distribution)
+        next_i = int(i_all[next_idx].astype(int))
+        next_j = int(j_all[next_idx].astype(int))
         self.frequency = self.frequency.at[next_i].add(1)
         self.frequency = self.frequency.at[next_j].add(1)
 
