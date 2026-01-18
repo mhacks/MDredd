@@ -119,6 +119,7 @@ class SnapshotAdapter:
             );
         """
         self.cursor.execute(create_snapshot_table)
+        self.conn.commit()
         self.judge_map = defaultdict(Tuple[int, int])
 
     def __del__(self) -> None:
@@ -126,6 +127,7 @@ class SnapshotAdapter:
 
     def clear(self):
         self.cursor.execute("DELETE FROM snapshots")
+        self.conn.commit()
 
     def snapshot(self, bdp_instance: bdp.BDPVectorized):
         snapshot_data = {
@@ -182,12 +184,14 @@ class LogAdapter():
         """
         
         self.cursor.execute(create_logs_table)
+        self.conn.commit()
 
     def __del__(self) -> None:
         self.conn.close()
 
     def clear(self):
         self.cursor.execute("DELETE FROM logs")
+        self.conn.commit()
     
     def log(self, log_data: ComparisonInputModel | PairRequestModel):
         log_type = "submit_pair" if isinstance(log_data, ComparisonInputModel) else "get_pair"
