@@ -1,0 +1,20 @@
+[project]
+name = "mdredd"
+version = "0.1.0"
+description = "A Realistic Pair-Wise Judging Algorithm API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.117.1",
+    "jax>=0.7.2",
+    "numpy>=2.3.2",
+    "pandas>=2.3.2",
+    "requests>=2.32.5",
+]
+
+[project.optional-dependencies]
+develop = [
+    "matplotlib>=3.10.6",
+    "scipy>=1.16.1",
+    "tqdm>=4.67.1",
+]

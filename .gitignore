@@ -1,0 +1,8 @@
+__pycache__
+results
+.venv/
+.git/
+*.log
+.DS_store
+saves
+*.pkl

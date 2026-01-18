@@ -1,0 +1,6 @@
+- debounce regeneration
+- vectorized r_tilde
+- rename some of the methods to make sense (ie r_tilde = reward)
+- refer to notion doc for specifics
+- get rid of the extra polymorphism
+- keep the SRP real
