@@ -1,23 +1,20 @@
 import logging
-import random
 from typing import Tuple
 
 from fastapi.responses import JSONResponse
 from fastapi import FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import numpy as np
 
 from app.exceptions import IncorrectPairFormatException, JudgeDoesNotOwnPairException, JudgingAlreadyStartedException, JudgingNotStartedException
-from app.adapters import StateManager, ProjectAdapter
+from app.adapters import JudgeManager, ProjectAdapter
 from app.models import ComparisonInputModel, GenericResponseModel, PairResponseModel, Project, RankingsResponseModel
-
-from dredd.bdp import BDPVectorized
-import pathlib
 from app import constants
 
-logger = logging.getLogger("uvicorn")
-# logging.basicConfig(level=logging.INFO,)
+from dredd.bdp import BDPVectorized
 
+logger = logging.getLogger("uvicorn")
 
 app = FastAPI()
 
@@ -29,24 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-random.seed(69420)
-
-
 class JudgingAPI:
     def __init__(self):
         self.enabled = False
-        self._load_and_start_if_possible()
-
-    def _load_and_start_if_possible(self):
-        save_files = sorted(pathlib.Path(
-            constants.STATE_MANAGER_SAVE_FILE_DIR).glob("*"))
-        logger.info(f"Found save files, {save_files}")
-        if not pathlib.Path(constants.PROJECT_ADAPTER_SAVE_FILE).exists() or len(save_files) == 0:
-            return
-        self.project_adapter = ProjectAdapter.load()
-        self.state_manager = StateManager.load(save_files[-1].absolute())
-
-        self.start()
 
     def get_enabled(self) -> bool:
         return self.enabled
@@ -55,13 +37,10 @@ class JudgingAPI:
         if self.enabled:
             raise JudgingAlreadyStartedException()
         if projects_csv is not None:
-            n_state = len(list(pathlib.Path(constants.STATE_MANAGER_SAVE_FILE_DIR).glob("*")))
             self.project_adapter = ProjectAdapter(projects_csv)
-            self.state_manager = StateManager(n_state)
+            self.judge_manager = JudgeManager()
 
-        latest_alpha = self.state_manager.get_most_recent_alpha()
-        self.BDP = BDPVectorized(
-            K=len(self.project_adapter), latest_alpha=latest_alpha)
+        self.BDP = BDPVectorized(len(self.project_adapter))
         self.enabled = True
 
     def resume(self):
@@ -78,8 +57,8 @@ class JudgingAPI:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not force and judge in self.state_manager.judge_map:
-            i, j = self.state_manager.judge_map[judge]
+        if not force and judge in self.judge_manager.judge_map:
+            i, j = self.judge_manager.judge_map[judge]
             return (self.project_adapter.get_project_from_id(i), self.project_adapter.get_project_from_id(j))
 
         i, j = self.BDP.get_next_pair()
@@ -87,8 +66,7 @@ class JudgingAPI:
         project_j = self.project_adapter.get_project_from_id(j)
         pair = (project_i, project_j)
 
-        self.state_manager.judge_map[judge] = (i, j)
-        self.state_manager.save()
+        self.judge_manager.judge_map[judge] = (i, j)
 
         return pair
 
@@ -96,9 +74,8 @@ class JudgingAPI:
         if not self.enabled:
             raise JudgingNotStartedException()
         
-        
-        if not self.state_manager.verify_judge_assignment(judge, left_project_id, right_project_id):
-            logger.info(self.state_manager.judge_map[judge])
+        if not self.judge_manager.verify_judge_assignment(judge, left_project_id, right_project_id):
+            logger.info(self.judge_manager.judge_map[judge])
             logger.info((left_project_id, right_project_id))
             raise JudgeDoesNotOwnPairException()
 
@@ -110,20 +87,17 @@ class JudgingAPI:
             right_project_id,
             winner_id
         )
-        self.state_manager.add_alpha_to_history(self.BDP.get_alphas().tolist())
-        del self.state_manager.judge_map[judge]
-        logger.info("Saving state manager.")
-        self.state_manager.save()
+        del self.judge_manager.judge_map[judge]
 
     def get_rankings(self):
-        if hasattr(self, "BDP") and self.project_adapter and self.state_manager:
-            return self.project_adapter.projects, self.state_manager.convergence_history
+        if hasattr(self, "BDP") and self.project_adapter and self.judge_manager: # fix
+            sorted_indices = np.flip(np.argsort(self.BDP.get_alphas()))
+            return [self.project_adapter.projects[i] for i in sorted_indices]
         else:
             raise JudgingNotStartedException()
 
 
 api = JudgingAPI()
-
 
 @app.get("/")
 def read_root():

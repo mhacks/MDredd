@@ -7,17 +7,12 @@ import time
 
 
 class BDPVectorized:
-    def __init__(self, K: int, latest_alpha: np.ndarray | None = None):
+    def __init__(self, K: int):
         self.K = K
         self.NUM_PAIRS = K * (K - 1) // 2
         self.key = jr.key(int(time.time_ns()))
         self.i_all, self.j_all = jnp.triu_indices(K, k=1)
-
-        if latest_alpha is not None:
-            self.alpha_t = jnp.array(latest_alpha)
-        else:
-            self.alpha_t = jnp.ones(K)
-
+        self.alpha_t = jnp.ones(K)
         self.frequency = jnp.zeros(self.K)
 
     def get_alphas(self) -> np.ndarray:
@@ -33,8 +28,8 @@ class BDPVectorized:
         self.key, subkey = jr.split(self.key)
 
         next_idx = jr.choice(subkey, self.NUM_PAIRS, p=distribution)
-        next_i: int = self.i_all[next_idx].astype(int)
-        next_j: int = self.j_all[next_idx].astype(int)
+        next_i = self.i_all[next_idx].astype(int)
+        next_j = self.j_all[next_idx].astype(int)
         self.frequency = self.frequency.at[next_i].add(1)
         self.frequency = self.frequency.at[next_j].add(1)
 
