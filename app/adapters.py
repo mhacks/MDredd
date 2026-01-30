@@ -12,6 +12,7 @@ import logging
 
 logger = logging.getLogger("uvicorn")
 
+
 class ProjectAdapter:
     def __init__(self):
         self.conn = sqlite3.connect(constants.DB_FILE, check_same_thread=False)
@@ -49,15 +50,19 @@ class ProjectAdapter:
 
             for i, (_, row) in enumerate(filtered_df.iterrows()):
                 track_value = row.get("M Hacks Main Track", None)
-                projects.append(Project(
-                    project_name=row["Project Title"],
-                    devpost_link=row["Submission Url"],
-                    table_num=row["Table Number"],
-                    project_id=i,
-                    tracks=track_value if track_value is not None and not pd.isna(track_value) else "No Track"
-                ))
+                projects.append(
+                    Project(
+                        project_name=row["Project Title"],
+                        devpost_link=row["Submission Url"],
+                        table_num=row["Table Number"],
+                        project_id=i,
+                        tracks=track_value
+                        if track_value is not None and not pd.isna(track_value)
+                        else "No Track",
+                    )
+                )
 
-            # Load new projects 
+            # Load new projects
             projects_insert_stmt = """
                 INSERT INTO projects (
                     project_id,
@@ -81,9 +86,9 @@ class ProjectAdapter:
 
             self.cursor.executemany(projects_insert_stmt, rows)
             self.conn.commit()
-        
+
         self.projects = self.get_projects()
-        
+
     def get_projects(self) -> List[Project]:
         self.cursor.execute("SELECT * FROM projects ORDER BY project_id")
         rows = self.cursor.fetchall()
@@ -104,6 +109,7 @@ class ProjectAdapter:
 
     def get_project_from_id(self, id: int) -> Project:
         return self.projects[id]
+
 
 class SnapshotAdapter:
     def __init__(self):
@@ -133,24 +139,26 @@ class SnapshotAdapter:
         snapshot_data = {
             "timestamp": int(time.time()),
             "judge_map": json.dumps(dict(self.judge_map)),
-            "bdp": bdp_instance.model_dump_json()
+            "bdp": bdp_instance.model_dump_json(),
         }
-        
+
         self.cursor.execute(
             "INSERT INTO snapshots (timestamp, judge_map, bdp) VALUES (?, ?, ?)",
             (
                 snapshot_data["timestamp"],
                 snapshot_data["judge_map"],
-                snapshot_data["bdp"]
-            )
+                snapshot_data["bdp"],
+            ),
         )
         self.conn.commit()
 
     def load_snapshot(self) -> Tuple[int, bdp.BDPVectorized | None]:
-        snapshot_record = self.cursor.execute("SELECT * FROM snapshots ORDER BY timestamp DESC").fetchone()
+        snapshot_record = self.cursor.execute(
+            "SELECT * FROM snapshots ORDER BY timestamp DESC"
+        ).fetchone()
         if not snapshot_record:
             return (0, None)
-        
+
         timestamp = snapshot_record[0]
         logger.info(f"Loaded snapshot from timestamp: {timestamp}")
         judge_map = json.loads(snapshot_record[1])
@@ -165,11 +173,17 @@ class SnapshotAdapter:
             return True
         except Exception:
             return False
-        
-    def verify_judge_assignment(self, uuid: str, left_project_id: int, right_project_id: int):
-        return left_project_id in self.judge_map[uuid] and right_project_id in self.judge_map[uuid]
 
-class LogAdapter():
+    def verify_judge_assignment(
+        self, uuid: str, left_project_id: int, right_project_id: int
+    ):
+        return (
+            left_project_id in self.judge_map[uuid]
+            and right_project_id in self.judge_map[uuid]
+        )
+
+
+class LogAdapter:
     def __init__(self):
         self.conn = sqlite3.connect(constants.DB_FILE, check_same_thread=False)
         self.cursor = self.conn.cursor()
@@ -182,7 +196,7 @@ class LogAdapter():
                 params TEXT NOT NULL
             );
         """
-        
+
         self.cursor.execute(create_logs_table)
         self.conn.commit()
 
@@ -192,22 +206,28 @@ class LogAdapter():
     def clear(self):
         self.cursor.execute("DELETE FROM logs")
         self.conn.commit()
-    
+
     def log(self, log_data: ComparisonInputModel | PairRequestModel):
-        log_type = "submit_pair" if isinstance(log_data, ComparisonInputModel) else "get_pair"
+        log_type = (
+            "submit_pair" if isinstance(log_data, ComparisonInputModel) else "get_pair"
+        )
 
         self.cursor.execute(
             "INSERT INTO logs (timestamp, type, params) VALUES (?, ?, ?)",
-            (
-                int(time.time()),
-                log_type,
-                log_data.model_dump_json()
-            )
+            (int(time.time()), log_type, log_data.model_dump_json()),
         )
         self.conn.commit()
 
-    def replay(self, snapshot_time: int, bdp_instance: bdp.BDPVectorized, judge_map: Dict[str, Tuple[int, int]]) -> None:
-        records = self.cursor.execute("SELECT * FROM logs WHERE timestamp > (?) ORDER BY timestamp ASC", (snapshot_time,))
+    def replay(
+        self,
+        snapshot_time: int,
+        bdp_instance: bdp.BDPVectorized,
+        judge_map: Dict[str, Tuple[int, int]],
+    ) -> None:
+        records = self.cursor.execute(
+            "SELECT * FROM logs WHERE timestamp > (?) ORDER BY timestamp ASC",
+            (snapshot_time,),
+        )
         for record in records:
             logger.info(f"Replaying log with timestamp: {record[0]}")
             log_type = record[1]
@@ -219,5 +239,9 @@ class LogAdapter():
                 judge_map[pair_params.uuid] = (i, j)
             else:
                 submit_params = ComparisonInputModel(**params)
-                bdp_instance.submit_comparison(submit_params.project_ids[0], submit_params.project_ids[1], submit_params.winner_id)
+                bdp_instance.submit_comparison(
+                    submit_params.project_ids[0],
+                    submit_params.project_ids[1],
+                    submit_params.winner_id,
+                )
                 del judge_map[submit_params.uuid]
