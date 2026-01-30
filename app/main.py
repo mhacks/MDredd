@@ -14,12 +14,12 @@ from app.exceptions import (
     JudgingAlreadyStartedException,
     JudgingNotStartedException,
 )
-from app.adapters import SnapshotAdapter, ProjectAdapter, LogAdapter, AssignmentAdapter
+from app.adapters import SnapshotAdapter, EntityAdapter, LogAdapter, AssignmentAdapter
 from app.models import (
     ComparisonInputModel,
     GenericResponseModel,
     PairResponseModel,
-    Project,
+    Entity,
     RankingsResponseModel,
     PairRequestModel,
 )
@@ -44,7 +44,7 @@ app.add_middleware(
 class JudgingAPI:
     def __init__(self):
         self.enabled = False
-        self.projects = ProjectAdapter()
+        self.entities = EntityAdapter()
         self.snapshots = SnapshotAdapter()
         self.assignments = AssignmentAdapter()
         self.logs = LogAdapter()
@@ -60,16 +60,16 @@ class JudgingAPI:
     def get_enabled(self) -> bool:
         return self.enabled
 
-    def start(self, projects_csv: UploadFile | None = None):
+    def start(self, entity_csv: UploadFile | None = None):
         if self.enabled:
             raise JudgingAlreadyStartedException()
 
-        self.projects.load(projects_csv)
-        if projects_csv is not None:
-            self.projects.clear()
+        self.entities.load(entity_csv)
+        if entity_csv is not None:
+            self.entities.clear()
             self.snapshots.clear()
             self.logs.clear()
-            self.BDP = BDPVectorized(K=len(self.projects))
+            self.BDP = BDPVectorized(K=len(self.entities))
 
         self.enabled = True
 
@@ -83,49 +83,49 @@ class JudgingAPI:
             raise JudgingNotStartedException()
         self.enabled = False
 
-    def get_pair(self, judge, force: bool = False) -> Tuple[Project, Project]:
+    def get_pair(self, judge, force: bool = False) -> Tuple[Entity, Entity]:
         if not self.enabled:
             raise JudgingNotStartedException()
 
         if not force and judge in self.snapshots.judge_map:
             i, j = self.snapshots.judge_map[judge]
             return (
-                self.projects[i],
-                self.projects[j],
+                self.entities[i],
+                self.entities[j],
             )
 
         i, j = self.BDP.get_next_pair()
-        project_i = self.projects[i]
-        project_j = self.projects[j]
-        pair = (project_i, project_j)
+        entity_i = self.entities[i]
+        entity_j = self.entities[j]
+        pair = (entity_i, entity_j)
 
         self.assignments[judge] = (i, j)
 
         return pair
 
     def submit_pair(
-        self, judge: str, left_project_id: int, right_project_id: int, winner_id: int
+        self, judge: str, entity_id_1: int, entity_id_2: int, winner_id: int
     ):
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not self.assignments.verify(judge, left_project_id, right_project_id):
+        if not self.assignments.verify(judge, entity_id_1, entity_id_2):
             logger.info(self.snapshots.judge_map[judge])
-            logger.info((left_project_id, right_project_id))
+            logger.info((entity_id_1, entity_id_2))
             raise JudgeDoesNotOwnPairException()
 
-        if winner_id not in (left_project_id, right_project_id):
+        if winner_id not in (entity_id_1, entity_id_2):
             raise IncorrectPairFormatException()
 
-        self.BDP.submit_comparison(left_project_id, right_project_id, winner_id)
+        self.BDP.submit_comparison(entity_id_1, entity_id_2, winner_id)
 
         del self.assignments[judge]
 
     def get_rankings(self):
         if self.enabled:
             sorted_indices = np.flip(np.argsort(self.BDP.get_alphas()))
-            projects = self.projects.to_list()
-            return [projects[i] for i in sorted_indices]
+            entities = self.entities.to_list()
+            return [entities[i] for i in sorted_indices]
         else:
             raise JudgingNotStartedException()
 
@@ -157,10 +157,10 @@ def read_root():
 
 
 @app.post("/start", response_model=GenericResponseModel)
-def start_judging(projects_csv: UploadFile | None = None):
+def start_judging(entities_csv: UploadFile | None = None):
     logger.info("Got request to start judging.")
     try:
-        api.start(projects_csv)
+        api.start(entities_csv)
         return {"status_code": 200, "message": "Successfully started!"}
     except JudgingAlreadyStartedException:
         return {"status_code": 200, "message": "Judging has already started!"}
@@ -238,8 +238,8 @@ def submit_comparison(comparison_request: ComparisonInputModel):
     try:
         api.submit_pair(
             comparison_request.uuid,
-            comparison_request.project_ids[0],
-            comparison_request.project_ids[1],
+            comparison_request.entity_ids[0],
+            comparison_request.entity_ids[1],
             comparison_request.winner_id,
         )
         api.logs.log(comparison_request)

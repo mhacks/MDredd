@@ -6,28 +6,28 @@ import logging
 
 from dredd import bdp
 
-from app.models import ComparisonInputModel, PairRequestModel, Project
+from app.models import ComparisonInputModel, PairRequestModel, Entity
 from app.db import db, EntityTable, LogTable, SnapshotTable, AssignmentTable
 from app.constants import MAX_SNAPSHOTS
 
 logger = logging.getLogger("uvicorn")
 
 
-class ProjectAdapter:
+class EntityAdapter:
     def __init__(self):
         db.create_tables([EntityTable], safe=True)
 
     def __len__(self):
         return EntityTable.select().count()
 
-    def __getitem__(self, id: int) -> Project:
+    def __getitem__(self, id: int) -> Entity:
         record = EntityTable.get(EntityTable.id == id)
-        return Project(**json.loads(record.data))
+        return Entity(**json.loads(record.data))
 
-    def to_list(self) -> List[Project]:
-        records = Project.select().order_by(Project.project_id)
-        projects = [Project(**json.loads(record.data)) for record in records]
-        return projects
+    def to_list(self) -> List[Entity]:
+        records = Entity.select().order_by(Entity.id)
+        entities = [Entity(**json.loads(record.data)) for record in records]
+        return entities
 
     def clear(self):
         db.drop_tables([EntityTable], safe=True)
@@ -36,16 +36,16 @@ class ProjectAdapter:
         if raw_csv is not None:
             self.clear()
 
-            # Read projects from csv
+            # Read entities from csv
             df = pd.read_csv(raw_csv.file)
             df["Table Number"] = df["Table Number"].fillna("").astype(str)
-            projects = []
+            entities = []
             filtered_df = df[df["Highest Step Completed"] == "Submit"]
 
             for i, (_, row) in enumerate(filtered_df.iterrows()):
                 track_value = row.get("M Hacks Main Track", None)
-                projects.append(
-                    Project(
+                entities.append(
+                    Entity(
                         project_name=row["Project Title"],
                         devpost_link=row["Submission Url"],
                         table_num=row["Table Number"],
@@ -54,7 +54,7 @@ class ProjectAdapter:
                         else "No Track",
                     )
                 )
-            rows = [{"data": p.model_dump_json()} for p in projects]
+            rows = [{"data": e.model_dump_json()} for e in entities]
 
             with db.atomic():
                 EntityTable.insert_many(rows).execute()
@@ -94,11 +94,11 @@ class AssignmentAdapter:
     def __init__(self):
         db.create_tables([SnapshotTable], safe=True)
 
-    def __setitem__(self, uuid: str, projects):
+    def __setitem__(self, uuid: str, entities):
         AssignmentTable.create(
             judge_id=uuid,
-            project_id_1=projects[0],
-            project_id_2=projects[1],
+            entity_id_1=entities[0],
+            entity_id_2=entities[1],
         )
 
     def __delitem__(self, uuid: str):
@@ -107,10 +107,10 @@ class AssignmentAdapter:
     def clear(self):
         db.drop_tables([SnapshotTable], safe=True)
 
-    def verify(self, uuid: str, project_id_1: int, project_id_2: int):
+    def verify(self, uuid: str, entity_id_1: int, entity_id_2: int):
         judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
-        pair = (judge_row.project_id_1, judge_row.project_id_2)
-        return project_id_1 in pair and project_id_2 in pair
+        pair = (judge_row.entity_id_1, judge_row.entity_id_2)
+        return entity_id_1 in pair and entity_id_2 in pair
 
 
 class LogAdapter:
@@ -148,7 +148,7 @@ class LogAdapter:
             else:
                 submit_params = ComparisonInputModel(**params)
                 bdp_instance.submit_comparison(
-                    submit_params.project_ids[0],
-                    submit_params.project_ids[1],
+                    submit_params.entity_ids[0],
+                    submit_params.entity_ids[1],
                     submit_params.winner_id,
                 )

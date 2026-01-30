@@ -15,8 +15,8 @@ class EntityTable(Model):
 
 class AssignmentTable(Model):
     judge_id = TextField()
-    project_id_1 = TextField()
-    project_id_2 = TextField()
+    entity_id_1 = TextField()
+    entity_id_2 = TextField()
     time = DateTimeField()
 
     class Meta:

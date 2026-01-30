@@ -2,7 +2,7 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel
 
 
-class Project(BaseModel):
+class Entity(BaseModel):
     project_name: str
     devpost_link: str
     table_num: str
@@ -17,17 +17,17 @@ class GenericResponseModel(BaseModel):
 
 class PairResponseModel(GenericResponseModel):
     is_started: bool
-    pair: Optional[Tuple[Project, Project]] = None
+    pair: Optional[Tuple[Entity, Entity]] = None
 
 
 class RankingsResponseModel(GenericResponseModel):
     is_started: bool
-    rankings: List[Project]
+    rankings: List[Entity]
 
 
 class ComparisonInputModel(BaseModel):
     uuid: str
-    project_ids: Tuple[int, int]
+    entity_ids: Tuple[int, int]
     winner_id: int
 
 
