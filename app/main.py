@@ -53,7 +53,6 @@ class JudgingAPI:
         if snapshot is not None:
             timestamp, bdp_instance = snapshot
             self.BDP = bdp_instance
-
             self.logs.replay(timestamp, self.BDP)
             self.enabled = True
 
@@ -64,11 +63,13 @@ class JudgingAPI:
         if self.enabled:
             raise JudgingAlreadyStartedException()
 
-        self.entities.load(entity_csv)
         if entity_csv is not None:
             self.entities.clear()
             self.snapshots.clear()
+            self.assignments.clear()
             self.logs.clear()
+
+            self.entities.load(entity_csv)
             self.BDP = BDPVectorized(K=len(self.entities))
 
         self.enabled = True
@@ -89,19 +90,11 @@ class JudgingAPI:
 
         if not force and judge in self.snapshots.judge_map:
             i, j = self.snapshots.judge_map[judge]
-            return (
-                self.entities[i],
-                self.entities[j],
-            )
+        else:
+            i, j = self.BDP.get_next_pair()
+            self.assignments[judge] = (i, j)
 
-        i, j = self.BDP.get_next_pair()
-        entity_i = self.entities[i]
-        entity_j = self.entities[j]
-        pair = (entity_i, entity_j)
-
-        self.assignments[judge] = (i, j)
-
-        return pair
+        return (self.entities[i], self.entities[j])
 
     def submit_pair(
         self, judge: str, entity_id_1: int, entity_id_2: int, winner_id: int
@@ -118,7 +111,6 @@ class JudgingAPI:
             raise IncorrectPairFormatException()
 
         self.BDP.submit_comparison(entity_id_1, entity_id_2, winner_id)
-
         del self.assignments[judge]
 
     def get_rankings(self):

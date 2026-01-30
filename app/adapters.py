@@ -7,7 +7,7 @@ import logging
 from dredd import bdp
 
 from app.models import ComparisonInputModel, PairRequestModel, Entity
-from app.db import db, EntityTable, LogTable, SnapshotTable, AssignmentTable
+from app.db import db, Entities, Logs, Snapshots, Assignments
 from app.constants import MAX_SNAPSHOTS
 
 logger = logging.getLogger("uvicorn")
@@ -15,13 +15,13 @@ logger = logging.getLogger("uvicorn")
 
 class EntityAdapter:
     def __init__(self):
-        db.create_tables([EntityTable], safe=True)
+        db.create_tables([Entities], safe=True)
 
     def __len__(self):
-        return EntityTable.select().count()
+        return Entities.select().count()
 
     def __getitem__(self, id: int) -> Entity:
-        record = EntityTable.get(EntityTable.id == id)
+        record = Entities.get(Entities.id == (id - 1))  # SQLite IDs start at 1
         return Entity(**json.loads(record.data))
 
     def to_list(self) -> List[Entity]:
@@ -30,7 +30,7 @@ class EntityAdapter:
         return entities
 
     def clear(self):
-        db.drop_tables([EntityTable], safe=True)
+        db.drop_tables([Entities], safe=True)
 
     def load(self, raw_csv: UploadFile = None):
         if raw_csv is not None:
@@ -57,33 +57,33 @@ class EntityAdapter:
             rows = [{"data": e.model_dump_json()} for e in entities]
 
             with db.atomic():
-                EntityTable.insert_many(rows).execute()
+                Entities.insert_many(rows).execute()
 
 
 class SnapshotAdapter:
     def __init__(self):
-        db.create_tables([SnapshotTable], safe=True)
+        db.create_tables([Snapshots], safe=True)
 
     def clear(self):
-        db.drop_tables([SnapshotTable], safe=True)
+        db.drop_tables([Snapshots], safe=True)
 
     def record(self, bdp_instance: bdp.BDPVectorized):
         with db.atomic():
-            SnapshotTable.create(bdp=bdp_instance.model_dump_json())
+            Snapshots.create(bdp=bdp_instance.model_dump_json())
 
             subquery = (
-                SnapshotTable.select(SnapshotTable.id)
-                .order_by(SnapshotTable.created_at.asc())
+                Snapshots.select(Snapshots.id)
+                .order_by(Snapshots.created_at.asc())
                 .offset(MAX_SNAPSHOTS)
             )
 
-            SnapshotTable.delete().where(SnapshotTable.id.in_(subquery)).execute()
+            Snapshots.delete().where(Snapshots.id.in_(subquery)).execute()
 
     def load(self) -> Tuple[int, bdp.BDPVectorized] | None:
-        record = SnapshotTable.select().order_by(SnapshotTable.time.desc()).first()
+        record = Snapshots.select().order_by(Snapshots.timestamp.desc()).first()
 
         if record is not None:
-            timestamp = record.time
+            timestamp = record.timestamp
             algo = bdp.BDPVectorized(**json.loads(record.data))
             return (timestamp, algo)
         else:
@@ -92,36 +92,35 @@ class SnapshotAdapter:
 
 class AssignmentAdapter:
     def __init__(self):
-        db.create_tables([SnapshotTable], safe=True)
+        db.create_tables([Snapshots], safe=True)
 
     def __setitem__(self, uuid: str, entities):
-        AssignmentTable.create(
+        Assignments.create(
             judge_id=uuid,
             entity_id_1=entities[0],
             entity_id_2=entities[1],
         )
 
     def __delitem__(self, uuid: str):
-        AssignmentTable.delete().where(AssignmentTable.judge_id == uuid).execute()
+        Assignments.delete().where(Assignments.judge_id == uuid).execute()
 
     def clear(self):
-        db.drop_tables([SnapshotTable], safe=True)
+        db.drop_tables([Snapshots], safe=True)
 
     def verify(self, uuid: str, entity_id_1: int, entity_id_2: int):
-        judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
+        judge_row = Assignments.get(Assignments.judge_id == uuid)
         pair = (judge_row.entity_id_1, judge_row.entity_id_2)
         return entity_id_1 in pair and entity_id_2 in pair
 
 
 class LogAdapter:
     def __init__(self):
-        db.create_tables([LogTable], safe=True)
+        db.create_tables([Logs], safe=True)
 
     def clear(self):
-        db.drop_tables([LogTable], safe=True)
+        db.drop_tables([Logs], safe=True)
 
     def log(self, log_data: ComparisonInputModel | PairRequestModel):
-        log_type = ""
         match log_data:
             case ComparisonInputModel():
                 log_type = "submit_pair"
@@ -130,16 +129,16 @@ class LogAdapter:
             case _:
                 raise
 
-        LogTable.create(type=log_type, params=log_data.model_dump_json())
+        Logs.create(type=log_type, params=log_data.model_dump_json())
 
     def replay(self, snapshot_time: int, bdp_instance: bdp.BDPVectorized) -> None:
         records = (
-            LogTable.select()
-            .where(LogTable.timestamp > snapshot_time)
-            .order_by(LogTable.timestamp.asc())
+            Logs.select()
+            .where(Logs.timestamp > snapshot_time)
+            .order_by(Logs.timestamp.asc())
         )
         for record in records:
-            logger.info(f"Replaying log with timestamp: {record.time}")
+            logger.info(f"Replaying log with timestamp: {record.timestamp}")
             log_type = record.type
             params = json.loads(record.params)
 
