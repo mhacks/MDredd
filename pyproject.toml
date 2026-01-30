@@ -9,6 +9,7 @@ dependencies = [
     "jax>=0.8.2",
     "numpy>=2.3.2",
     "pandas>=2.3.2",
+    "peewee>=3.19.0",
     "requests>=2.32.5",
 ]
 
