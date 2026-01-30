@@ -14,7 +14,7 @@ from app.exceptions import (
     JudgingAlreadyStartedException,
     JudgingNotStartedException,
 )
-from app.adapters import SnapshotAdapter, ProjectAdapter, LogAdapter
+from app.adapters import SnapshotAdapter, ProjectAdapter, LogAdapter, AssignmentAdapter
 from app.models import (
     ComparisonInputModel,
     GenericResponseModel,
@@ -44,18 +44,17 @@ app.add_middleware(
 class JudgingAPI:
     def __init__(self):
         self.enabled = False
-        self.project_adapter = ProjectAdapter()
-        self.snapshot_manager = SnapshotAdapter()
-        self.log_manager = LogAdapter()
+        self.projects = ProjectAdapter()
+        self.snapshots = SnapshotAdapter()
+        self.assignments = AssignmentAdapter()
+        self.logs = LogAdapter()
 
-        self.project_adapter.load_projects(None)
-        snapshot: Tuple[int, BDPVectorized] = self.snapshot_manager.load_snapshot()
-        timestamp, bdp_instance = snapshot
-        self.BDP = bdp_instance
-        if self.BDP:
-            self.log_manager.replay(
-                timestamp, self.BDP, self.snapshot_manager.judge_map
-            )  # replay any logs
+        snapshot = self.snapshots.load()
+        if snapshot is not None:
+            timestamp, bdp_instance = snapshot
+            self.BDP = bdp_instance
+
+            self.logs.replay(timestamp, self.BDP)
             self.enabled = True
 
     def get_enabled(self) -> bool:
@@ -65,11 +64,13 @@ class JudgingAPI:
         if self.enabled:
             raise JudgingAlreadyStartedException()
 
-        self.project_adapter.load_projects(projects_csv)
+        self.projects.load(projects_csv)
         if projects_csv is not None:
-            self.snapshot_manager.clear()
-            self.log_manager.clear()
-            self.BDP = BDPVectorized(K=len(self.project_adapter.projects))
+            self.projects.clear()
+            self.snapshots.clear()
+            self.logs.clear()
+            self.BDP = BDPVectorized(K=len(self.projects))
+
         self.enabled = True
 
     def resume(self):
@@ -86,19 +87,19 @@ class JudgingAPI:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not force and judge in self.snapshot_manager.judge_map:
-            i, j = self.snapshot_manager.judge_map[judge]
+        if not force and judge in self.snapshots.judge_map:
+            i, j = self.snapshots.judge_map[judge]
             return (
-                self.project_adapter.get_project_from_id(i),
-                self.project_adapter.get_project_from_id(j),
+                self.projects[i],
+                self.projects[j],
             )
 
         i, j = self.BDP.get_next_pair()
-        project_i = self.project_adapter.get_project_from_id(i)
-        project_j = self.project_adapter.get_project_from_id(j)
+        project_i = self.projects[i]
+        project_j = self.projects[j]
         pair = (project_i, project_j)
 
-        self.snapshot_manager.judge_map[judge] = (i, j)
+        self.assignments[judge] = (i, j)
 
         return pair
 
@@ -108,10 +109,8 @@ class JudgingAPI:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not self.snapshot_manager.verify_judge_assignment(
-            judge, left_project_id, right_project_id
-        ):
-            logger.info(self.snapshot_manager.judge_map[judge])
+        if not self.assignments.verify(judge, left_project_id, right_project_id):
+            logger.info(self.snapshots.judge_map[judge])
             logger.info((left_project_id, right_project_id))
             raise JudgeDoesNotOwnPairException()
 
@@ -120,12 +119,13 @@ class JudgingAPI:
 
         self.BDP.submit_comparison(left_project_id, right_project_id, winner_id)
 
-        del self.snapshot_manager.judge_map[judge]
+        del self.assignments[judge]
 
     def get_rankings(self):
         if self.enabled:
             sorted_indices = np.flip(np.argsort(self.BDP.get_alphas()))
-            return [self.project_adapter.projects[i] for i in sorted_indices]
+            projects = self.projects.to_list()
+            return [projects[i] for i in sorted_indices]
         else:
             raise JudgingNotStartedException()
 
@@ -146,7 +146,7 @@ def snapshot(request, call_next):
             if snapshot_counter >= constants.SNAPSHOT_INTERVAL:
                 snapshot_counter = 0
                 print("Taking snapshot")
-                api.snapshot_manager.snapshot(api.BDP)
+                api.snapshots.record(api.BDP)
 
     return call_next(request)
 
@@ -207,12 +207,12 @@ def resume_judging():
 @app.get("/pair", response_model=PairResponseModel)
 def get_pair(pair_request: PairRequestModel = Depends()):
     uuid = pair_request.uuid
-    force = pair_request.force == True
+    force = pair_request.force
 
     logger.info(f"Got request for pair by {uuid} (force={force}).")
     try:
         pair = api.get_pair(uuid, force)
-        api.log_manager.log(pair_request)
+        api.logs.log(pair_request)
         return {
             "is_started": api.get_enabled(),
             "pair": pair,
@@ -242,7 +242,7 @@ def submit_comparison(comparison_request: ComparisonInputModel):
             comparison_request.project_ids[1],
             comparison_request.winner_id,
         )
-        api.log_manager.log(comparison_request)
+        api.logs.log(comparison_request)
         return {"message": "Successfully submitted pair!", "status_code": 200}
     except JudgingNotStartedException:
         return {"message": "Judging has not started!", "status_code": 409}

@@ -1,45 +1,39 @@
-from collections import defaultdict
 from fastapi import UploadFile
 import pandas as pd
-from app import constants
-from app.models import ComparisonInputModel, PairRequestModel, Project
-from typing import Tuple, List, Dict
-import sqlite3
-from dredd import bdp
-import time
+from typing import Tuple, List
 import json
 import logging
+
+from dredd import bdp
+
+from app.models import ComparisonInputModel, PairRequestModel, Project
+from app.db import db, EntityTable, LogTable, SnapshotTable, AssignmentTable
+from app.constants import MAX_SNAPSHOTS
 
 logger = logging.getLogger("uvicorn")
 
 
 class ProjectAdapter:
     def __init__(self):
-        self.conn = sqlite3.connect(constants.DB_FILE, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.projects = []
+        db.create_tables([EntityTable], safe=True)
 
-        # Setup projects table
-        create_projects_table = """
-            CREATE TABLE IF NOT EXISTS projects (
-                project_id INTEGER PRIMARY KEY,
-                project_name TEXT NOT NULL,
-                devpost_link TEXT NOT NULL,
-                table_num TEXT NOT NULL,
-                tracks TEXT NOT NULL
-            );
-        """
-        self.cursor.execute(create_projects_table)
+    def __len__(self):
+        return EntityTable.select().count()
 
-    def __del__(self) -> None:
-        self.conn.close()
+    def __getitem__(self, id: int) -> Project:
+        record = EntityTable.get(EntityTable.id == id)
+        return Project(**json.loads(record.data))
+
+    def to_list(self) -> List[Project]:
+        records = Project.select().order_by(Project.project_id)
+        projects = [Project(**json.loads(record.data)) for record in records]
+        return projects
 
     def clear(self):
-        self.cursor.execute("DELETE FROM projects")
+        db.drop_tables([EntityTable], safe=True)
 
-    def load_projects(self, raw_csv: UploadFile = None):
+    def load(self, raw_csv: UploadFile = None):
         if raw_csv is not None:
-            # Clear old projects
             self.clear()
 
             # Read projects from csv
@@ -55,188 +49,102 @@ class ProjectAdapter:
                         project_name=row["Project Title"],
                         devpost_link=row["Submission Url"],
                         table_num=row["Table Number"],
-                        project_id=i,
                         tracks=track_value
                         if track_value is not None and not pd.isna(track_value)
                         else "No Track",
                     )
                 )
+            rows = [{"data": p.model_dump_json()} for p in projects]
 
-            # Load new projects
-            projects_insert_stmt = """
-                INSERT INTO projects (
-                    project_id,
-                    project_name,
-                    devpost_link,
-                    table_num,
-                    tracks
-                ) VALUES (?, ?, ?, ?, ?)
-            """
-
-            rows = [
-                (
-                    p.project_id,
-                    p.project_name,
-                    p.devpost_link,
-                    p.table_num,
-                    p.tracks,
-                )
-                for p in projects
-            ]
-
-            self.cursor.executemany(projects_insert_stmt, rows)
-            self.conn.commit()
-
-        self.projects = self.get_projects()
-
-    def get_projects(self) -> List[Project]:
-        self.cursor.execute("SELECT * FROM projects ORDER BY project_id")
-        rows = self.cursor.fetchall()
-        logger.info(f"Fetched {len(rows)} projects")
-
-        projects = []
-        for row in rows:
-            project = Project(
-                project_id=row[0],
-                project_name=row[1],
-                devpost_link=row[2],
-                table_num=row[3],
-                tracks=row[4] if row[4] is not None else "No Track",
-            )
-            projects.append(project)
-
-        return projects
-
-    def get_project_from_id(self, id: int) -> Project:
-        return self.projects[id]
+            with db.atomic():
+                EntityTable.insert_many(rows).execute()
 
 
 class SnapshotAdapter:
     def __init__(self):
-        self.conn = sqlite3.connect(constants.DB_FILE, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-
-        # Setup snapshot table
-        create_snapshot_table = """
-            CREATE TABLE IF NOT EXISTS snapshots (
-                timestamp INTEGER PRIMARY KEY,
-                judge_map TEXT NOT NULL,
-                bdp TEXT NOT NULL
-            );
-        """
-        self.cursor.execute(create_snapshot_table)
-        self.conn.commit()
-        self.judge_map = defaultdict(Tuple[int, int])
-
-    def __del__(self) -> None:
-        self.conn.close()
+        db.create_tables([SnapshotTable], safe=True)
 
     def clear(self):
-        self.cursor.execute("DELETE FROM snapshots")
-        self.conn.commit()
+        db.drop_tables([SnapshotTable], safe=True)
 
-    def snapshot(self, bdp_instance: bdp.BDPVectorized):
-        snapshot_data = {
-            "timestamp": int(time.time()),
-            "judge_map": json.dumps(dict(self.judge_map)),
-            "bdp": bdp_instance.model_dump_json(),
-        }
+    def record(self, bdp_instance: bdp.BDPVectorized):
+        with db.atomic():
+            SnapshotTable.create(bdp=bdp_instance.model_dump_json())
 
-        self.cursor.execute(
-            "INSERT INTO snapshots (timestamp, judge_map, bdp) VALUES (?, ?, ?)",
-            (
-                snapshot_data["timestamp"],
-                snapshot_data["judge_map"],
-                snapshot_data["bdp"],
-            ),
+            subquery = (
+                SnapshotTable.select(SnapshotTable.id)
+                .order_by(SnapshotTable.created_at.asc())
+                .offset(MAX_SNAPSHOTS)
+            )
+
+            SnapshotTable.delete().where(SnapshotTable.id.in_(subquery)).execute()
+
+    def load(self) -> Tuple[int, bdp.BDPVectorized] | None:
+        record = SnapshotTable.select().order_by(SnapshotTable.time.desc()).first()
+
+        if record is not None:
+            timestamp = record.time
+            algo = bdp.BDPVectorized(**json.loads(record.data))
+            return (timestamp, algo)
+        else:
+            return None
+
+
+class AssignmentAdapter:
+    def __init__(self):
+        db.create_tables([SnapshotTable], safe=True)
+
+    def __setitem__(self, uuid: str, projects):
+        AssignmentTable.create(
+            judge_id=uuid,
+            project_id_1=projects[0],
+            project_id_2=projects[1],
         )
-        self.conn.commit()
 
-    def load_snapshot(self) -> Tuple[int, bdp.BDPVectorized | None]:
-        snapshot_record = self.cursor.execute(
-            "SELECT * FROM snapshots ORDER BY timestamp DESC"
-        ).fetchone()
-        if not snapshot_record:
-            return (0, None)
+    def __delitem__(self, uuid: str):
+        AssignmentTable.delete().where(AssignmentTable.judge_id == uuid).execute()
 
-        timestamp = snapshot_record[0]
-        logger.info(f"Loaded snapshot from timestamp: {timestamp}")
-        judge_map = json.loads(snapshot_record[1])
-        bdp_data = json.loads(snapshot_record[2])
+    def clear(self):
+        db.drop_tables([SnapshotTable], safe=True)
 
-        self.judge_map = judge_map
-        return (timestamp, bdp.BDPVectorized(**bdp_data))
-
-    def remove_judge_assignment(self, uuid) -> bool:
-        try:
-            del self.judge_map[uuid]
-            return True
-        except Exception:
-            return False
-
-    def verify_judge_assignment(
-        self, uuid: str, left_project_id: int, right_project_id: int
-    ):
-        return (
-            left_project_id in self.judge_map[uuid]
-            and right_project_id in self.judge_map[uuid]
-        )
+    def verify(self, uuid: str, project_id_1: int, project_id_2: int):
+        judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
+        pair = (judge_row.project_id_1, judge_row.project_id_2)
+        return project_id_1 in pair and project_id_2 in pair
 
 
 class LogAdapter:
     def __init__(self):
-        self.conn = sqlite3.connect(constants.DB_FILE, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-
-        # Setup logs table
-        create_logs_table = """
-            CREATE TABLE IF NOT EXISTS logs (
-                timestamp INTEGER PRIMARY KEY,
-                type TEXT NOT NULL CHECK (type IN ('get_pair', 'submit_pair')),
-                params TEXT NOT NULL
-            );
-        """
-
-        self.cursor.execute(create_logs_table)
-        self.conn.commit()
-
-    def __del__(self) -> None:
-        self.conn.close()
+        db.create_tables([LogTable], safe=True)
 
     def clear(self):
-        self.cursor.execute("DELETE FROM logs")
-        self.conn.commit()
+        db.drop_tables([LogTable], safe=True)
 
     def log(self, log_data: ComparisonInputModel | PairRequestModel):
-        log_type = (
-            "submit_pair" if isinstance(log_data, ComparisonInputModel) else "get_pair"
-        )
+        log_type = ""
+        match log_data:
+            case ComparisonInputModel():
+                log_type = "submit_pair"
+            case PairRequestModel():
+                log_type = "get_pair"
+            case _:
+                raise
 
-        self.cursor.execute(
-            "INSERT INTO logs (timestamp, type, params) VALUES (?, ?, ?)",
-            (int(time.time()), log_type, log_data.model_dump_json()),
-        )
-        self.conn.commit()
+        LogTable.create(type=log_type, params=log_data.model_dump_json())
 
-    def replay(
-        self,
-        snapshot_time: int,
-        bdp_instance: bdp.BDPVectorized,
-        judge_map: Dict[str, Tuple[int, int]],
-    ) -> None:
-        records = self.cursor.execute(
-            "SELECT * FROM logs WHERE timestamp > (?) ORDER BY timestamp ASC",
-            (snapshot_time,),
+    def replay(self, snapshot_time: int, bdp_instance: bdp.BDPVectorized) -> None:
+        records = (
+            LogTable.select()
+            .where(LogTable.timestamp > snapshot_time)
+            .order_by(LogTable.timestamp.asc())
         )
         for record in records:
-            logger.info(f"Replaying log with timestamp: {record[0]}")
-            log_type = record[1]
-            params = json.loads(record[2])
+            logger.info(f"Replaying log with timestamp: {record.time}")
+            log_type = record.type
+            params = json.loads(record.params)
 
             if log_type == "get_pair":
-                pair_params = PairRequestModel(**params)
-                i, j = bdp_instance.get_next_pair()
-                judge_map[pair_params.uuid] = (i, j)
+                bdp_instance.get_next_pair()
             else:
                 submit_params = ComparisonInputModel(**params)
                 bdp_instance.submit_comparison(
@@ -244,4 +152,3 @@ class LogAdapter:
                     submit_params.project_ids[1],
                     submit_params.winner_id,
                 )
-                del judge_map[submit_params.uuid]

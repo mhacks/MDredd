@@ -1,8 +1,8 @@
 from peewee import Model, TextField, DateTimeField
 from playhouse.sqlite_ext import SqliteExtDatabase, JSONField, AutoIncrementField
-from app import constants
+from app.constants import DB_FILE
 
-db = SqliteExtDatabase(constants.DB_FILE)
+db = SqliteExtDatabase(DB_FILE)
 
 
 class EntityTable(Model):
@@ -15,7 +15,8 @@ class EntityTable(Model):
 
 class AssignmentTable(Model):
     judge_id = TextField()
-    project_id = TextField()
+    project_id_1 = TextField()
+    project_id_2 = TextField()
     time = DateTimeField()
 
     class Meta:
