@@ -20,6 +20,7 @@ from app.models import (
     GenericResponseModel,
     PairResponseModel,
     Entity,
+    EntityWithId,
     RankingsResponseModel,
     PairRequestModel,
 )
@@ -84,7 +85,7 @@ class JudgingAPI:
             raise JudgingNotStartedException()
         self.enabled = False
 
-    def get_pair(self, judge, force: bool = False) -> Tuple[Entity, Entity]:
+    def get_pair(self, judge, force: bool = False) -> Tuple[EntityWithId, EntityWithId]:
         if not self.enabled:
             raise JudgingNotStartedException()
 
@@ -94,7 +95,10 @@ class JudgingAPI:
             i, j = self.BDP.get_next_pair()
             self.assignments[judge] = (i, j)
 
-        return (self.entities[i], self.entities[j])
+        response_entity_i = EntityWithId(**self.entities[i].dict(), id=i)
+        response_entity_j = EntityWithId(**self.entities[j].dict(), id=j)
+
+        return (response_entity_i, response_entity_j)
 
     def submit_pair(
         self, judge: str, entity_id_1: int, entity_id_2: int, winner_id: int

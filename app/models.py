@@ -6,8 +6,11 @@ class Entity(BaseModel):
     project_name: str
     devpost_link: str
     table_num: str
-    project_id: int
     tracks: str
+
+
+class EntityWithId(Entity):
+    id: int
 
 
 class GenericResponseModel(BaseModel):
