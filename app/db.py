@@ -5,15 +5,16 @@ from app.constants import DB_FILE
 db = SqliteExtDatabase(DB_FILE)
 
 
-class Entities(Model):
+class EntityTable(Model):
     id = AutoIncrementField(primary_key=True)
     data = JSONField()
 
     class Meta:
         database = db
+        table_name = "entities"
 
 
-class Assignments(Model):
+class AssignmentTable(Model):
     judge_id = TextField(primary_key=True)
     entity_id_1 = TextField()
     entity_id_2 = TextField()
@@ -21,18 +22,20 @@ class Assignments(Model):
 
     class Meta:
         database = db
+        table_name = "assignments"
 
 
-class Snapshots(Model):
+class SnapshotTable(Model):
     id = AutoIncrementField(primary_key=True)
     timestamp = DateTimeField()
     state = JSONField()
 
     class Meta:
         database = db
+        table_name = "snapshots"
 
 
-class Logs(Model):
+class WriteAheadTable(Model):
     id = AutoIncrementField(primary_key=True)
     timestamp = DateTimeField()
     event = TextField()
@@ -40,3 +43,4 @@ class Logs(Model):
 
     class Meta:
         database = db
+        table_name = "writeahead"

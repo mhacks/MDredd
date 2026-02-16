@@ -14,12 +14,16 @@ from app.exceptions import (
     JudgingAlreadyStartedException,
     JudgingNotStartedException,
 )
-from app.adapters import SnapshotAdapter, EntityAdapter, LogAdapter, AssignmentAdapter
+from app.adapters import (
+    SnapshotAdapter,
+    EntityAdapter,
+    WriteAheadAdapter,
+    AssignmentAdapter,
+)
 from app.models import (
     ComparisonInputModel,
     GenericResponseModel,
     PairResponseModel,
-    Entity,
     EntityWithId,
     RankingsResponseModel,
     PairRequestModel,
@@ -48,13 +52,13 @@ class JudgingAPI:
         self.entities = EntityAdapter()
         self.snapshots = SnapshotAdapter()
         self.assignments = AssignmentAdapter()
-        self.logs = LogAdapter()
+        self.wal = WriteAheadAdapter()
 
         snapshot = self.snapshots.load()
         if snapshot is not None:
             timestamp, bdp_instance = snapshot
             self.BDP = bdp_instance
-            self.logs.replay(timestamp, self.BDP)
+            self.wal.replay(timestamp, self.BDP)
             self.enabled = True
 
     def get_enabled(self) -> bool:
@@ -68,7 +72,7 @@ class JudgingAPI:
             self.entities.clear()
             self.snapshots.clear()
             self.assignments.clear()
-            self.logs.clear()
+            self.wal.clear()
 
             self.entities.load(entity_csv)
             self.BDP = BDPVectorized(K=len(self.entities))
@@ -208,7 +212,7 @@ def get_pair(pair_request: PairRequestModel = Depends()):
     logger.info(f"Got request for pair by {uuid} (force={force}).")
     try:
         pair = api.get_pair(uuid, force)
-        api.logs.log(pair_request)
+        api.wal.log(pair_request)
         return {
             "is_started": api.get_enabled(),
             "pair": pair,
@@ -238,7 +242,7 @@ def submit_comparison(comparison_request: ComparisonInputModel):
             comparison_request.entity_ids[1],
             comparison_request.winner_id,
         )
-        api.logs.log(comparison_request)
+        api.wal.log(comparison_request)
         return {"message": "Successfully submitted pair!", "status_code": 200}
     except JudgingNotStartedException:
         return {"message": "Judging has not started!", "status_code": 409}
