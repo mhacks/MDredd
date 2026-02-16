@@ -93,8 +93,8 @@ class JudgingAPI:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not force and judge in self.snapshots.judge_map:
-            i, j = self.snapshots.judge_map[judge]
+        if not force and judge in self.assignments:
+            i, j = self.assignments[judge]
         else:
             i, j = self.BDP.get_next_pair()
             self.assignments[judge] = (i, j)
@@ -111,7 +111,7 @@ class JudgingAPI:
             raise JudgingNotStartedException()
 
         if not self.assignments.verify(judge, entity_id_1, entity_id_2):
-            logger.info(self.snapshots.judge_map[judge])
+            logger.info(self.assignments[judge])
             logger.info((entity_id_1, entity_id_2))
             raise JudgeDoesNotOwnPairException()
 

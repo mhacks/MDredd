@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Tuple, List
 import json
 import logging
+import time
 
 from dredd import bdp
 
@@ -71,7 +72,9 @@ class SnapshotAdapter:
 
     def record(self, bdp_instance: bdp.BDPVectorized):
         with db.atomic():
-            SnapshotTable.create(bdp=bdp_instance.model_dump_json())
+            SnapshotTable.create(
+                state=bdp_instance.model_dump_json(), timestamp=time.time()
+            )
 
             subquery = (
                 SnapshotTable.select(SnapshotTable.id)
@@ -94,25 +97,32 @@ class SnapshotAdapter:
 
 class AssignmentAdapter:
     def __init__(self):
-        db.create_tables([SnapshotTable], safe=True)
+        db.create_tables([AssignmentTable], safe=True)
+
+    def __getitem__(self, uuid: str):
+        judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
+        return (judge_row.entity_id_1, judge_row.entity_id_2)
 
     def __setitem__(self, uuid: str, entities):
         AssignmentTable.create(
             judge_id=uuid,
             entity_id_1=entities[0],
             entity_id_2=entities[1],
+            timestamp=time.time(),
         )
 
     def __delitem__(self, uuid: str):
         AssignmentTable.delete().where(AssignmentTable.judge_id == uuid).execute()
 
+    def __contains__(self, uuid: str):
+        return AssignmentTable.select().where(AssignmentTable.judge_id == uuid).exists()
+
     def clear(self):
-        db.drop_tables([SnapshotTable], safe=True)
-        db.create_tables([SnapshotTable], safe=True)
+        db.drop_tables([AssignmentTable], safe=True)
+        db.create_tables([AssignmentTable], safe=True)
 
     def verify(self, uuid: str, entity_id_1: int, entity_id_2: int):
-        judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
-        pair = (judge_row.entity_id_1, judge_row.entity_id_2)
+        pair = self[uuid]
         return entity_id_1 in pair and entity_id_2 in pair
 
 
@@ -133,7 +143,9 @@ class WriteAheadAdapter:
             case _:
                 raise
 
-        WriteAheadTable.create(type=log_type, params=log_data.model_dump_json())
+        WriteAheadTable.create(
+            event=log_type, timestamp=time.time(), params=log_data.model_dump_json()
+        )
 
     def replay(self, snapshot_time: int, bdp_instance: bdp.BDPVectorized) -> None:
         records = (

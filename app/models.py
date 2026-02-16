@@ -20,7 +20,7 @@ class GenericResponseModel(BaseModel):
 
 class PairResponseModel(GenericResponseModel):
     is_started: bool
-    pair: Optional[Tuple[Entity, Entity]] = None
+    pair: Optional[Tuple[EntityWithId, EntityWithId]] = None
 
 
 class RankingsResponseModel(GenericResponseModel):
