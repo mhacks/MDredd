@@ -31,6 +31,7 @@ class EntityAdapter:
 
     def clear(self):
         db.drop_tables([Entities], safe=True)
+        db.create_tables([Entities], safe=True)
 
     def load(self, raw_csv: UploadFile = None):
         if raw_csv is not None:
@@ -66,6 +67,7 @@ class SnapshotAdapter:
 
     def clear(self):
         db.drop_tables([Snapshots], safe=True)
+        db.create_tables([Snapshots], safe=True)
 
     def record(self, bdp_instance: bdp.BDPVectorized):
         with db.atomic():
@@ -106,6 +108,7 @@ class AssignmentAdapter:
 
     def clear(self):
         db.drop_tables([Snapshots], safe=True)
+        db.create_tables([Snapshots], safe=True)
 
     def verify(self, uuid: str, entity_id_1: int, entity_id_2: int):
         judge_row = Assignments.get(Assignments.judge_id == uuid)
@@ -119,6 +122,7 @@ class LogAdapter:
 
     def clear(self):
         db.drop_tables([Logs], safe=True)
+        db.create_tables([Logs], safe=True)
 
     def log(self, log_data: ComparisonInputModel | PairRequestModel):
         match log_data:
