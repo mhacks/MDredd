@@ -22,11 +22,11 @@ class EntityAdapter:
         return EntityTable.select().count()
 
     def __getitem__(self, id: int) -> Entity:
-        record = EntityTable.get(EntityTable.id == (id - 1))  # SQLite IDs start at 1
+        record = EntityTable.get(EntityTable.id == (id + 1))  # SQLite IDs start at 1
         return Entity(**json.loads(record.data))
 
     def to_list(self) -> List[Entity]:
-        records = Entity.select().order_by(Entity.id)
+        records = EntityTable.select().order_by(EntityTable.id)
         entities = [Entity(**json.loads(record.data)) for record in records]
         return entities
 
@@ -73,12 +73,12 @@ class SnapshotAdapter:
     def record(self, bdp_instance: bdp.BDPVectorized):
         with db.atomic():
             SnapshotTable.create(
-                state=bdp_instance.model_dump_json(), timestamp=time.time()
+                bdp=bdp_instance.model_dump_json(), timestamp=time.time()
             )
 
             subquery = (
                 SnapshotTable.select(SnapshotTable.id)
-                .order_by(SnapshotTable.created_at.asc())
+                .order_by(SnapshotTable.id.asc())
                 .offset(MAX_SNAPSHOTS)
             )
 
@@ -89,7 +89,7 @@ class SnapshotAdapter:
 
         if record is not None:
             timestamp = record.timestamp
-            algo = bdp.BDPVectorized(**json.loads(record.data))
+            algo = bdp.BDPVectorized(**json.loads(record.bdp))
             return (timestamp, algo)
         else:
             return None
@@ -137,14 +137,14 @@ class WriteAheadAdapter:
     def log(self, log_data: ComparisonInputModel | PairRequestModel):
         match log_data:
             case ComparisonInputModel():
-                log_type = "submit_pair"
+                event_type = "submit_pair"
             case PairRequestModel():
-                log_type = "get_pair"
+                event_type = "get_pair"
             case _:
                 raise
 
         WriteAheadTable.create(
-            event=log_type, timestamp=time.time(), params=log_data.model_dump_json()
+            event=event_type, timestamp=time.time(), params=log_data.model_dump_json()
         )
 
     def replay(self, snapshot_time: int, bdp_instance: bdp.BDPVectorized) -> None:
@@ -155,15 +155,17 @@ class WriteAheadAdapter:
         )
         for record in records:
             logger.info(f"Replaying log with timestamp: {record.timestamp}")
-            log_type = record.type
             params = json.loads(record.params)
 
-            if log_type == "get_pair":
-                bdp_instance.get_next_pair()
-            else:
-                submit_params = ComparisonInputModel(**params)
-                bdp_instance.submit_comparison(
-                    submit_params.entity_ids[0],
-                    submit_params.entity_ids[1],
-                    submit_params.winner_id,
-                )
+            match record.event:
+                case "get_pair":
+                    bdp_instance.get_next_pair()
+                case "submit_pair":
+                    submit_params = ComparisonInputModel(**params)
+                    bdp_instance.submit_comparison(
+                        submit_params.entity_ids[0],
+                        submit_params.entity_ids[1],
+                        submit_params.winner_id,
+                    )
+                case _:
+                    raise

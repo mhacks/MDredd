@@ -10,6 +10,12 @@ class JudgingAlreadyStartedException(RuntimeError):
         super().__init__(self.message)
 
 
+class JudgingNeverStartedException(RuntimeError):
+    def __init__(self, message="Judging Never Started"):
+        self.message = message
+        super().__init__(self.message)
+
+
 class JudgeDoesNotOwnPairException(RuntimeError):
     def __init__(self, message="This Judge does not own the pair!"):
         self.message = message

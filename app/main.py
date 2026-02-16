@@ -12,6 +12,7 @@ from app.exceptions import (
     IncorrectPairFormatException,
     JudgeDoesNotOwnPairException,
     JudgingAlreadyStartedException,
+    JudgingNeverStartedException,
     JudgingNotStartedException,
 )
 from app.adapters import (
@@ -82,6 +83,10 @@ class JudgingAPI:
     def resume(self):
         if self.enabled:
             raise JudgingAlreadyStartedException()
+
+        if not hasattr(self, "BDP"):
+            raise JudgingNeverStartedException()
+
         self.enabled = True
 
     def stop(self):
@@ -145,7 +150,7 @@ def snapshot(request, call_next):
 
             if snapshot_counter >= constants.SNAPSHOT_INTERVAL:
                 snapshot_counter = 0
-                print("Taking snapshot")
+                logger.info("Taking snapshot")
                 api.snapshots.record(api.BDP)
 
     return call_next(request)
@@ -196,6 +201,8 @@ def resume_judging():
         return {"message": "Successfully resumed!", "status_code": 200}
     except JudgingAlreadyStartedException:
         return {"message": "Judging has already started", "status_code": 200}
+    except JudgingNeverStartedException:
+        return {"message": "Judging never started", "status_code": 200}
     except Exception as e:
         logger.error(e)
         return JSONResponse(

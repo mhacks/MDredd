@@ -28,7 +28,7 @@ class AssignmentTable(Model):
 class SnapshotTable(Model):
     id = AutoIncrementField(primary_key=True)
     timestamp = DateTimeField()
-    state = JSONField()
+    bdp = JSONField()
 
     class Meta:
         database = db
