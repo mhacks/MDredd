@@ -1,12 +1,6 @@
 from typing import List, Optional, Tuple
 from pydantic import BaseModel
-
-
-class Entity(BaseModel):
-    project_name: str
-    devpost_link: str
-    table_num: str
-    tracks: str
+from app.entity import Entity
 
 
 class EntityWithId(Entity):

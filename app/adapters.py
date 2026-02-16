@@ -1,5 +1,4 @@
 from fastapi import UploadFile
-import pandas as pd
 from typing import Tuple, List
 import json
 import logging
@@ -7,7 +6,8 @@ import time
 
 from dredd import bdp
 
-from app.models import ComparisonInputModel, PairRequestModel, Entity
+from app.entity import Entity
+from app.models import ComparisonInputModel, PairRequestModel
 from app.db import db, EntityTable, WriteAheadTable, SnapshotTable, AssignmentTable
 from app.constants import MAX_SNAPSHOTS
 
@@ -37,25 +37,7 @@ class EntityAdapter:
     def load(self, raw_csv: UploadFile = None):
         if raw_csv is not None:
             self.clear()
-
-            # Read entities from csv
-            df = pd.read_csv(raw_csv.file)
-            df["Table Number"] = df["Table Number"].fillna("").astype(str)
-            entities = []
-            filtered_df = df[df["Highest Step Completed"] == "Submit"]
-
-            for i, (_, row) in enumerate(filtered_df.iterrows()):
-                track_value = row.get("M Hacks Main Track", None)
-                entities.append(
-                    Entity(
-                        project_name=row["Project Title"],
-                        devpost_link=row["Submission Url"],
-                        table_num=row["Table Number"],
-                        tracks=track_value
-                        if track_value is not None and not pd.isna(track_value)
-                        else "No Track",
-                    )
-                )
+            entities = Entity.list_from_csv(raw_csv)
             rows = [{"data": e.model_dump_json()} for e in entities]
 
             with db.atomic():
