@@ -97,12 +97,6 @@ class JudgeWorker:
     def flush(self) -> None:
         self._call("flush")
 
-    def snapshot(self) -> None:
-        self._call("snapshot")
-
-    def alphas(self) -> np.ndarray:
-        return self._call("alphas")
-
     def _call(self, name: str, payload: CommandPayload = None):
         reply: queue.Queue = queue.Queue(maxsize=1)
         self.channel.put(Command(name=name, payload=payload, reply=reply))
@@ -154,13 +148,6 @@ class JudgeWorker:
             return True
         if command.name == "flush":
             command.reply.put(None)
-            return False
-        if command.name == "snapshot":
-            self._snapshot()
-            command.reply.put(None)
-            return False
-        if command.name == "alphas":
-            command.reply.put(self._require_bdp().get_alphas())
             return False
         if command.name == "reset":
             self._reset(command.payload)

@@ -14,15 +14,6 @@ dependencies = [
     "requests>=2.32.5",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-]
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
-
 [tool.pyright]
 pythonVersion = "3.14"
 venvPath = "."
