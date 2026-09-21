@@ -53,10 +53,14 @@ class SnapshotAdapter:
         db.create_tables([SnapshotTable], safe=True)
 
     def record(self, bdp_instance: BayesianDecisionProcess):
+        payload = {
+            "K": bdp_instance.K,
+            "alpha_t": bdp_instance.alpha_t.tolist(),
+            "frequency": bdp_instance.frequency.tolist(),
+            "key": bdp_instance.key.tolist(),
+        }
         with db.atomic():
-            SnapshotTable.create(
-                bdp=bdp_instance.model_dump_json(), timestamp=time.time()
-            )
+            SnapshotTable.create(bdp=payload, timestamp=time.time())
 
             subquery = (
                 SnapshotTable.select(SnapshotTable.id)
@@ -71,7 +75,10 @@ class SnapshotAdapter:
 
         if record is not None:
             timestamp = record.timestamp
-            algo = BayesianDecisionProcess(**json.loads(record.bdp))
+            payload = record.bdp
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            algo = BayesianDecisionProcess(**payload)
             return (timestamp, algo)
         else:
             return None

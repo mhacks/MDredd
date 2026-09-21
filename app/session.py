@@ -1,27 +1,20 @@
-import logging
 from typing import Tuple
-from fastapi import UploadFile
-import numpy as np
 
+from fastapi import UploadFile
+
+from app.adapters import (
+    AssignmentAdapter,
+    EntityAdapter,
+    SnapshotAdapter,
+    WriteAheadAdapter,
+)
 from app.exceptions import (
-    IncorrectPairFormatException,
-    JudgeDoesNotOwnPairException,
     JudgingAlreadyStartedException,
     JudgingNeverStartedException,
     JudgingNotStartedException,
 )
-from app.adapters import (
-    SnapshotAdapter,
-    EntityAdapter,
-    WriteAheadAdapter,
-    AssignmentAdapter,
-)
-from app.models import (
-    EntityWithId,
-)
-from app.algorithm import BayesianDecisionProcess
-
-logger = logging.getLogger(__name__)
+from app.models import ComparisonInputModel, EntityWithId
+from app.worker import JudgeWorker
 
 
 class Session:
@@ -31,13 +24,18 @@ class Session:
         self.snapshots = SnapshotAdapter()
         self.assignments = AssignmentAdapter()
         self.wal = WriteAheadAdapter()
-
-        snapshot = self.snapshots.load()
-        if snapshot is not None:
-            timestamp, bdp_instance = snapshot
-            self.bdp = bdp_instance
-            self.wal.replay(timestamp, self.bdp)
+        self.worker = JudgeWorker(
+            entities=self.entities,
+            snapshots=self.snapshots,
+            assignments=self.assignments,
+            wal=self.wal,
+        )
+        self.worker.start()
+        if self.worker.recovered:
             self.enabled = True
+
+    def close(self) -> None:
+        self.worker.shutdown()
 
     def get_enabled(self) -> bool:
         return self.enabled
@@ -47,13 +45,14 @@ class Session:
             raise JudgingAlreadyStartedException()
 
         if entity_csv is not None:
+            self.worker.flush()
             self.entities.clear()
             self.snapshots.clear()
             self.assignments.clear()
             self.wal.clear()
 
             self.entities.load(entity_csv)
-            self.bdp = BayesianDecisionProcess(K=len(self.entities))
+            self.worker.reset(len(self.entities))
 
         self.enabled = True
 
@@ -61,7 +60,7 @@ class Session:
         if self.enabled:
             raise JudgingAlreadyStartedException()
 
-        if not hasattr(self, "bdp"):
+        if not self.worker.has_bdp():
             raise JudgingNeverStartedException()
 
         self.enabled = True
@@ -75,16 +74,7 @@ class Session:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not force and judge in self.assignments:
-            i, j = self.assignments[judge]
-        else:
-            i, j = self.bdp.get_next_pair()
-            self.assignments[judge] = (i, j)
-
-        response_entity_i = EntityWithId(**self.entities[i].dict(), id=i)
-        response_entity_j = EntityWithId(**self.entities[j].dict(), id=j)
-
-        return (response_entity_i, response_entity_j)
+        return self.worker.request_pair(judge, force)
 
     def submit_pair(
         self, judge: str, entity_id_1: int, entity_id_2: int, winner_id: int
@@ -92,21 +82,14 @@ class Session:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        if not self.assignments.verify(judge, entity_id_1, entity_id_2):
-            logger.info(self.assignments[judge])
-            logger.info((entity_id_1, entity_id_2))
-            raise JudgeDoesNotOwnPairException()
-
-        if winner_id not in (entity_id_1, entity_id_2):
-            raise IncorrectPairFormatException()
-
-        self.bdp.submit_comparison(entity_id_1, entity_id_2, winner_id)
-        del self.assignments[judge]
+        comparison = ComparisonInputModel(
+            uuid=judge,
+            entity_ids=(entity_id_1, entity_id_2),
+            winner_id=winner_id,
+        )
+        self.worker.submit(comparison)
 
     def get_rankings(self):
-        if self.enabled:
-            sorted_indices = np.flip(np.argsort(self.bdp.get_alphas()))
-            entities = self.entities.to_list()
-            return [entities[i] for i in sorted_indices]
-        else:
+        if not self.enabled:
             raise JudgingNotStartedException()
+        return self.worker.rankings()

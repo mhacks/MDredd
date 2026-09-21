@@ -7,7 +7,9 @@ import uvicorn
 import logging
 
 from app.api import admin_router, judge_router
+from app.api.dev_router import dev_router
 from app.session import Session
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,20 +21,30 @@ class State(TypedDict):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[State]:
     session = Session()
-    yield {"session": session}
+    try:
+        yield {"session": session}
+    finally:
+        session.close()
 
 
-app = FastAPI(lifespan=lifespan)
-app.include_router(admin_router)
-app.include_router(judge_router)
+def create_app() -> FastAPI:
+    application = FastAPI(lifespan=lifespan)
+    application.include_router(admin_router)
+    application.include_router(judge_router)
+    if settings.ENABLE_CRASH_ROUTE:
+        application.include_router(dev_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:8000", "*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:8000", "*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    return application
+
+
+app = create_app()
 
 
 if __name__ == "__main__":

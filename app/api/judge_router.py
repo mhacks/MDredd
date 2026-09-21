@@ -24,7 +24,6 @@ def get_pair(request: Request, pair_request: PairRequestModel = Depends()):
     logger.info(f"Got request for pair by {uuid} (force={force}).")
     try:
         pair = session.get_pair(uuid, force)
-        session.wal.log(pair_request)
         return {
             "is_started": session.get_enabled(),
             "pair": pair,
@@ -55,7 +54,6 @@ def submit_comparison(request: Request, comparison_request: ComparisonInputModel
             comparison_request.entity_ids[1],
             comparison_request.winner_id,
         )
-        session.wal.log(comparison_request)
         return {"message": "Successfully submitted pair!", "status_code": 200}
     except JudgingNotStartedException:
         return {"message": "Judging has not started!", "status_code": 409}
