@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -22,12 +23,13 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 CommandPayload = int | PairRequestModel | ComparisonInputModel | None
+Reply = tuple[EntityWithId, EntityWithId] | None
 
 
 @dataclass
 class Command:
     name: str
-    reply: queue.Queue
+    reply: queue.Queue[Reply | Exception]
     payload: CommandPayload = None
 
 
@@ -47,32 +49,32 @@ class JudgeWorker:
         assignments: AssignmentAdapter,
         wal: WriteAheadAdapter,
     ):
-        self.entities = entities
-        self.snapshots = snapshots
-        self.assignments = assignments
-        self.wal = wal
+        self.entities: EntityAdapter = entities
+        self.snapshots: SnapshotAdapter = snapshots
+        self.assignments: AssignmentAdapter = assignments
+        self.wal: WriteAheadAdapter = wal
         self.channel: queue.Queue[Command] = queue.Queue()
         self.bdp: BayesianDecisionProcess | None = None
-        self._updates = 0
+        self._updates: int = 0
         self._entities: list[Entity] | None = None
         self._rankings: list[Entity] | None = None
-        self._lock = threading.Lock()
-        self._ready = threading.Event()
+        self._lock: threading.Lock = threading.Lock()
+        self._ready: threading.Event = threading.Event()
         self._bootstrap_error: Exception | None = None
-        self._thread = threading.Thread(
+        self._thread: threading.Thread = threading.Thread(
             target=self._run, name="judge-worker", daemon=True
         )
 
     def start(self) -> None:
         self._thread.start()
-        self._ready.wait()
+        _ = self._ready.wait()
         if self._bootstrap_error is not None:
             raise self._bootstrap_error
 
     def shutdown(self) -> None:
         if not self._thread.is_alive():
             return
-        self._call("stop")
+        _ = self._call("stop")
         self._thread.join(timeout=5)
 
     def has_bdp(self) -> bool:
@@ -86,19 +88,22 @@ class JudgeWorker:
             return list(self._rankings)
 
     def reset(self, entity_count: int) -> None:
-        self._call("reset", entity_count)
+        _ = self._call("reset", entity_count)
 
     def request_pair(self, pair_request: PairRequestModel) -> tuple[EntityWithId, EntityWithId]:
-        return self._call("get_pair", pair_request)
+        result = self._call("get_pair", pair_request)
+        if isinstance(result, tuple):
+            return result
+        raise RuntimeError("Pair request did not return a pair")
 
     def submit(self, comparison: ComparisonInputModel) -> None:
-        self._call("submit", comparison)
+        _ = self._call("submit", comparison)
 
     def flush(self) -> None:
-        self._call("flush")
+        _ = self._call("flush")
 
-    def _call(self, name: str, payload: CommandPayload = None):
-        reply: queue.Queue = queue.Queue(maxsize=1)
+    def _call(self, name: str, payload: CommandPayload = None) -> Reply:
+        reply: queue.Queue[Reply | Exception] = queue.Queue(maxsize=1)
         self.channel.put(Command(name=name, payload=payload, reply=reply))
         result = reply.get()
         if isinstance(result, Exception):
@@ -128,7 +133,7 @@ class JudgeWorker:
                     command.reply.put(exc)
         finally:
             if not db.is_closed():
-                db.close()
+                _ = db.close()
 
     def _bootstrap(self) -> None:
         snapshot = self.snapshots.load()
@@ -221,7 +226,7 @@ class JudgeWorker:
 
         self._after_ack(command, apply)
 
-    def _after_ack(self, command: Command, apply) -> None:
+    def _after_ack(self, command: Command, apply: Callable[[], None]) -> None:
         try:
             apply()
         except Exception:

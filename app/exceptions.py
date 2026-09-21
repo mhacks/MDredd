@@ -1,28 +1,23 @@
 class JudgingNotStartedException(RuntimeError):
-    def __init__(self, message="Judging Has Not Started"):
-        self.message = message
-        super().__init__(self.message)
+    def __init__(self, message: str = "Judging Has Not Started") -> None:
+        super().__init__(message)
 
 
 class JudgingAlreadyStartedException(RuntimeError):
-    def __init__(self, message="Judging Has Already Started"):
-        self.message = message
-        super().__init__(self.message)
+    def __init__(self, message: str = "Judging Has Already Started") -> None:
+        super().__init__(message)
 
 
 class JudgingNeverStartedException(RuntimeError):
-    def __init__(self, message="Judging Never Started"):
-        self.message = message
-        super().__init__(self.message)
+    def __init__(self, message: str = "Judging Never Started") -> None:
+        super().__init__(message)
 
 
 class JudgeDoesNotOwnPairException(RuntimeError):
-    def __init__(self, message="This Judge does not own the pair!"):
-        self.message = message
-        super().__init__(self.message)
+    def __init__(self, message: str = "This Judge does not own the pair!") -> None:
+        super().__init__(message)
 
 
 class IncorrectPairFormatException(RuntimeError):
-    def __init__(self, message="This Judge did not submit a pair correctly!"):
-        self.message = message
-        super().__init__(self.message)
+    def __init__(self, message: str = "This Judge did not submit a pair correctly!") -> None:
+        super().__init__(message)

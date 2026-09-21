@@ -17,7 +17,7 @@ class Entity(BaseModel):
         entities = []
         filtered_df = df[df["Highest Step Completed"] == "Submit"]
 
-        for i, (_, row) in enumerate(filtered_df.iterrows()):
+        for _, row in filtered_df.iterrows():
             track_value = row.get("M Hacks Main Track", None)
             tracks = (
                 str(track_value)

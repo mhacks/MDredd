@@ -17,13 +17,13 @@ from app.worker import JudgeWorker
 
 
 class Session:
-    def __init__(self):
-        self.enabled = False
-        self.entities = EntityAdapter()
-        self.snapshots = SnapshotAdapter()
-        self.assignments = AssignmentAdapter()
-        self.wal = WriteAheadAdapter()
-        self.worker = JudgeWorker(
+    def __init__(self) -> None:
+        self.enabled: bool = False
+        self.entities: EntityAdapter = EntityAdapter()
+        self.snapshots: SnapshotAdapter = SnapshotAdapter()
+        self.assignments: AssignmentAdapter = AssignmentAdapter()
+        self.wal: WriteAheadAdapter = WriteAheadAdapter()
+        self.worker: JudgeWorker = JudgeWorker(
             entities=self.entities,
             snapshots=self.snapshots,
             assignments=self.assignments,

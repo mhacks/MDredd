@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 from jax import jit
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
 
 FIELD_DTYPES = {
     "alpha_t": jnp.float32,
@@ -21,11 +21,10 @@ class BayesianDecisionProcess(BaseModel):
     key: jnp.ndarray
 
     class Config:
-        json_encoders: ClassVar[dict] = {jnp.ndarray: lambda v: v.tolist()}
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed: ClassVar[bool] = True
 
     @model_validator(mode="before")
-    def initialize_missing(cls, values):
+    def initialize_missing(cls, values: dict[str, object]):
         K = values.get("K", 0)
 
         defaults = {
@@ -50,7 +49,9 @@ class BayesianDecisionProcess(BaseModel):
         )
 
     @field_validator(*FIELD_DTYPES.keys(), mode="before")
-    def ensure_correct_dtype(cls, v, info):
+    def ensure_correct_dtype(cls, v: object, info: ValidationInfo):
+        if info.field_name is None:
+            raise ValueError("Validator is missing a field name")
         dtype = FIELD_DTYPES[info.field_name]
         return jnp.array(v, dtype=dtype)
 
@@ -81,13 +82,13 @@ class BayesianDecisionProcess(BaseModel):
     def MM(alpha_t: jnp.ndarray, i: int, j: int, Y_ij: int) -> jnp.ndarray:
         alpha_0 = jnp.sum(alpha_t)
 
-        C = alpha_t / alpha_0
-        C_ij_denom = alpha_0 * (alpha_t[i] + alpha_t[j] + 1.0)
-        C = C.at[i].set(
-            ((alpha_t[i] + (1.0 + Y_ij) / 2.0) * (alpha_t[i] + alpha_t[j])) / C_ij_denom
+        c = alpha_t / alpha_0
+        c_ij_denom = alpha_0 * (alpha_t[i] + alpha_t[j] + 1.0)
+        c = c.at[i].set(
+            ((alpha_t[i] + (1.0 + Y_ij) / 2.0) * (alpha_t[i] + alpha_t[j])) / c_ij_denom
         )
-        C = C.at[j].set(
-            ((alpha_t[j] + (1.0 - Y_ij) / 2.0) * (alpha_t[i] + alpha_t[j])) / C_ij_denom
+        c = c.at[j].set(
+            ((alpha_t[j] + (1.0 - Y_ij) / 2.0) * (alpha_t[i] + alpha_t[j])) / c_ij_denom
         )
 
         D_ij_denom = alpha_0 * (alpha_0 + 1.0) * (alpha_t[i] + alpha_t[j] + 2.0)
@@ -111,9 +112,9 @@ class BayesianDecisionProcess(BaseModel):
 
         D = D_i + D_j + D_rest
 
-        sum_ck_sq = jnp.sum(C**2)
+        sum_ck_sq = jnp.sum(c**2)
         alpha_0_prime = (D - 1.0) / (sum_ck_sq - D)
-        alpha_prime = C * alpha_0_prime
+        alpha_prime = c * alpha_0_prime
 
         return alpha_prime
 

@@ -59,7 +59,7 @@ class SnapshotAdapter:
             "key": bdp_instance.key.tolist(),
         }
         with db.atomic():
-            SnapshotTable.create(bdp=payload, timestamp=time.time())
+            _ = SnapshotTable.create(bdp=payload, timestamp=time.time())
 
             subquery = (
                 SnapshotTable.select(SnapshotTable.id)
@@ -87,11 +87,11 @@ class AssignmentAdapter:
     def __init__(self):
         db.create_tables([AssignmentTable], safe=True)
 
-    def __getitem__(self, uuid: str):
+    def __getitem__(self, uuid: str) -> tuple[int, int]:
         judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
-        return (judge_row.entity_id_1, judge_row.entity_id_2)
+        return (int(judge_row.entity_id_1), int(judge_row.entity_id_2))
 
-    def __setitem__(self, uuid: str, entities):
+    def __setitem__(self, uuid: str, entities: tuple[int, int]) -> None:
         AssignmentTable.replace(
             judge_id=uuid,
             entity_id_1=entities[0],
@@ -128,10 +128,8 @@ class WriteAheadAdapter:
                 event_type = "submit_pair"
             case PairRequestModel():
                 event_type = "get_pair"
-            case _:
-                raise TypeError(f"Unsupported write-ahead record: {type(log_data).__name__}")
 
-        WriteAheadTable.create(
+        _ = WriteAheadTable.create(
             event=event_type, timestamp=time.time(), params=log_data.model_dump_json()
         )
 
@@ -147,7 +145,7 @@ class WriteAheadAdapter:
 
             match record.event:
                 case "get_pair":
-                    bdp_instance.get_next_pair()
+                    _ = bdp_instance.get_next_pair()
                 case "submit_pair":
                     submit_params = ComparisonInputModel(**params)
                     bdp_instance.submit_comparison(
