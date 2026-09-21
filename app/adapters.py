@@ -86,12 +86,12 @@ class AssignmentAdapter:
         return (judge_row.entity_id_1, judge_row.entity_id_2)
 
     def __setitem__(self, uuid: str, entities):
-        AssignmentTable.create(
+        AssignmentTable.replace(
             judge_id=uuid,
             entity_id_1=entities[0],
             entity_id_2=entities[1],
             timestamp=time.time(),
-        )
+        ).execute()
 
     def __delitem__(self, uuid: str):
         AssignmentTable.delete().where(AssignmentTable.judge_id == uuid).execute()

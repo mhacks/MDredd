@@ -61,7 +61,7 @@ class Session:
         if self.enabled:
             raise JudgingAlreadyStartedException()
 
-        if not hasattr(self, "BDP"):
+        if not hasattr(self, "bdp"):
             raise JudgingNeverStartedException()
 
         self.enabled = True
