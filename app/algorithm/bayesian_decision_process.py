@@ -13,7 +13,7 @@ FIELD_DTYPES = {
 }
 
 
-class BDPVectorized(BaseModel):
+class BayesianDecisionProcess(BaseModel):
     K: int
     alpha_t: jnp.ndarray
     frequency: jnp.ndarray
@@ -49,12 +49,12 @@ class BDPVectorized(BaseModel):
 
     def submit_comparison(self, i: int, j: int, winner: int):
         Y_ij = 1 if winner == i else -1
-        self.alpha_t = BDPVectorized.MM(self.alpha_t, i, j, Y_ij)
+        self.alpha_t = BayesianDecisionProcess.MM(self.alpha_t, i, j, Y_ij)
 
     def get_next_pair(self, temp: float = 1.0) -> Tuple[int, int]:
         i_all, j_all = jnp.triu_indices(self.K, k=1)
         pair_frequency = self.frequency[i_all] + self.frequency[j_all]
-        distribution = BDPVectorized.softmax(-pair_frequency, temp)
+        distribution = BayesianDecisionProcess.softmax(-pair_frequency, temp)
         self.key, subkey = jr.split(self.key)
 
         NUM_PAIRS = self.K * (self.K - 1) // 2

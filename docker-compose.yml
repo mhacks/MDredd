@@ -4,6 +4,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DB_FILE=/app/data/mdredd.db
+      - MDREDD_DB_FILE=/app/data/mdredd.db
     volumes:
       - ./data:/app/data

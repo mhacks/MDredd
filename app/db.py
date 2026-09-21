@@ -1,8 +1,8 @@
 from peewee import Model, TextField, DateTimeField, IntegerField
 from playhouse.sqlite_ext import SqliteExtDatabase, JSONField, AutoIncrementField
-from app.constants import DB_FILE
+from app.settings import settings
 
-db = SqliteExtDatabase(DB_FILE)
+db = SqliteExtDatabase(settings.DB_FILE)
 
 
 class EntityTable(Model):
