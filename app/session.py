@@ -1,4 +1,3 @@
-from typing import Tuple
 
 from fastapi import UploadFile
 
@@ -13,7 +12,7 @@ from app.exceptions import (
     JudgingNeverStartedException,
     JudgingNotStartedException,
 )
-from app.models import ComparisonInputModel, EntityWithId
+from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
 from app.worker import JudgeWorker
 
 
@@ -31,7 +30,7 @@ class Session:
             wal=self.wal,
         )
         self.worker.start()
-        if self.worker.recovered:
+        if self.worker.has_bdp():
             self.enabled = True
 
     def close(self) -> None:
@@ -70,23 +69,16 @@ class Session:
             raise JudgingNotStartedException()
         self.enabled = False
 
-    def get_pair(self, judge, force: bool = False) -> Tuple[EntityWithId, EntityWithId]:
+    def get_pair(self, pair_request: PairRequestModel) -> tuple[EntityWithId, EntityWithId]:
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        return self.worker.request_pair(judge, force)
+        return self.worker.request_pair(pair_request)
 
-    def submit_pair(
-        self, judge: str, entity_id_1: int, entity_id_2: int, winner_id: int
-    ):
+    def submit_pair(self, comparison: ComparisonInputModel):
         if not self.enabled:
             raise JudgingNotStartedException()
 
-        comparison = ComparisonInputModel(
-            uuid=judge,
-            entity_ids=(entity_id_1, entity_id_2),
-            winner_id=winner_id,
-        )
         self.worker.submit(comparison)
 
     def get_rankings(self):

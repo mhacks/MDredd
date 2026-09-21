@@ -1,9 +1,10 @@
-from typing import Tuple
-import numpy as np
+import time
+from typing import ClassVar
+
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 from jax import jit
-import time
 from pydantic import BaseModel, field_validator, model_validator
 
 FIELD_DTYPES = {
@@ -20,7 +21,7 @@ class BayesianDecisionProcess(BaseModel):
     key: jnp.ndarray
 
     class Config:
-        json_encoders = {jnp.ndarray: lambda v: v.tolist()}
+        json_encoders: ClassVar[dict] = {jnp.ndarray: lambda v: v.tolist()}
         arbitrary_types_allowed = True
 
     @model_validator(mode="before")
@@ -34,10 +35,19 @@ class BayesianDecisionProcess(BaseModel):
         }
 
         for field, default_fn in defaults.items():
-            if not values.get(field):
+            if values.get(field) is None:
                 values[field] = default_fn()
 
         return values
+
+    @classmethod
+    def create(cls, k: int) -> BayesianDecisionProcess:
+        return cls(
+            K=k,
+            alpha_t=jnp.ones(k, dtype=jnp.float32),
+            frequency=jnp.zeros(k, dtype=jnp.int32),
+            key=jr.PRNGKey(int(time.time_ns())),
+        )
 
     @field_validator(*FIELD_DTYPES.keys(), mode="before")
     def ensure_correct_dtype(cls, v, info):
@@ -51,7 +61,7 @@ class BayesianDecisionProcess(BaseModel):
         Y_ij = 1 if winner == i else -1
         self.alpha_t = BayesianDecisionProcess.MM(self.alpha_t, i, j, Y_ij)
 
-    def get_next_pair(self, temp: float = 1.0) -> Tuple[int, int]:
+    def get_next_pair(self, temp: float = 1.0) -> tuple[int, int]:
         i_all, j_all = jnp.triu_indices(self.K, k=1)
         pair_frequency = self.frequency[i_all] + self.frequency[j_all]
         distribution = BayesianDecisionProcess.softmax(-pair_frequency, temp)

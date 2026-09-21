@@ -1,5 +1,6 @@
-from peewee import Model, TextField, DateTimeField, IntegerField
-from playhouse.sqlite_ext import SqliteExtDatabase, JSONField, AutoIncrementField
+from peewee import DateTimeField, IntegerField, Model, TextField
+from playhouse.sqlite_ext import AutoIncrementField, JSONField, SqliteExtDatabase
+
 from app.settings import settings
 
 db = SqliteExtDatabase(settings.DB_FILE)

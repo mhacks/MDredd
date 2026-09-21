@@ -1,5 +1,6 @@
-from fastapi.responses import JSONResponse
-from fastapi import UploadFile, APIRouter, Request
+from logging import getLogger
+
+from fastapi import APIRouter, Request, UploadFile
 
 from app.exceptions import (
     JudgingAlreadyStartedException,
@@ -10,8 +11,6 @@ from app.models import (
     GenericResponseModel,
     RankingsResponseModel,
 )
-
-from logging import getLogger
 
 logger = getLogger(__name__)
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -26,12 +25,6 @@ def start_judging(request: Request, entities_csv: UploadFile | None = None):
         return {"status_code": 200, "message": "Successfully started!"}
     except JudgingAlreadyStartedException:
         return {"status_code": 200, "message": "Judging has already started!"}
-    except Exception as e:
-        logger.error(e)
-        return JSONResponse(
-            status_code=500,
-            content={"message": "Unable to start API. Please check logs."},
-        )
 
 
 @admin_router.post("/stop", response_model=GenericResponseModel)
@@ -43,12 +36,6 @@ def stop_judging(request: Request):
         return {"message": "Successfully stopped!", "status_code": 200}
     except JudgingNotStartedException:
         return {"message": "Judging has not started!", "status_code": 200}
-    except Exception as e:
-        logger.error(e)
-        return JSONResponse(
-            status_code=500,
-            content={"message": "Unable to stop API. Please check logs."},
-        )
 
 
 @admin_router.post("/resume", response_model=GenericResponseModel)
@@ -62,12 +49,6 @@ def resume_judging(request: Request):
         return {"message": "Judging has already started", "status_code": 200}
     except JudgingNeverStartedException:
         return {"message": "Judging never started", "status_code": 200}
-    except Exception as e:
-        logger.error(e)
-        return JSONResponse(
-            status_code=500,
-            content={"message": "Unable to resume API. Please check logs."},
-        )
 
 
 @admin_router.get("/rankings", response_model=RankingsResponseModel)
@@ -88,9 +69,3 @@ def get_rankings(request: Request):
             "is_started": False,
             "rankings": [],
         }
-    except Exception as e:
-        logger.error(e)
-        return JSONResponse(
-            status_code=500,
-            content={"message": "Unable to get rankings. Please check logs."},
-        )

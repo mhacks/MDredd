@@ -1,29 +1,31 @@
-from fastapi.responses import JSONResponse
-from fastapi import Depends, APIRouter, Request
+from logging import getLogger
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request
 
 from app.exceptions import JudgingNotStartedException
 from app.models import (
     ComparisonInputModel,
     GenericResponseModel,
-    PairResponseModel,
     PairRequestModel,
+    PairResponseModel,
 )
-from logging import getLogger
 
 logger = getLogger(__name__)
 judge_router = APIRouter(prefix="/judge", tags=["judge"])
 
 
 @judge_router.get("/pair", response_model=PairResponseModel)
-def get_pair(request: Request, pair_request: PairRequestModel = Depends()):
+def get_pair(request: Request, pair_request: Annotated[PairRequestModel, Depends()]):
     session = request.state.session
 
-    uuid = pair_request.uuid
-    force = pair_request.force
-
-    logger.info(f"Got request for pair by {uuid} (force={force}).")
+    logger.info(
+        "Got request for pair by %s (force=%s).",
+        pair_request.uuid,
+        pair_request.force,
+    )
     try:
-        pair = session.get_pair(uuid, force)
+        pair = session.get_pair(pair_request)
         return {
             "is_started": session.get_enabled(),
             "pair": pair,
@@ -36,30 +38,13 @@ def get_pair(request: Request, pair_request: PairRequestModel = Depends()):
             "message": "Judging has not started!",
             "status_code": 409,
         }
-    except Exception as e:
-        logger.error(e)
-        return JSONResponse(
-            status_code=500,
-            content={"message": "Unable to get pair. Please check logs."},
-        )
 
 
 @judge_router.post("/submit", response_model=GenericResponseModel)
 def submit_comparison(request: Request, comparison_request: ComparisonInputModel):
     session = request.state.session
     try:
-        session.submit_pair(
-            comparison_request.uuid,
-            comparison_request.entity_ids[0],
-            comparison_request.entity_ids[1],
-            comparison_request.winner_id,
-        )
+        session.submit_pair(comparison_request)
         return {"message": "Successfully submitted pair!", "status_code": 200}
     except JudgingNotStartedException:
         return {"message": "Judging has not started!", "status_code": 409}
-    except Exception as e:
-        logger.error(e)
-        return JSONResponse(
-            status_code=500,
-            content={"message": "Unable to submit comparison. Please check logs."},
-        )

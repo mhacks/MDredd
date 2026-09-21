@@ -7,6 +7,7 @@ from fastapi import UploadFile
 
 from app.db import db
 from app.main import create_app
+from app.models import ComparisonInputModel, PairRequestModel
 from app.session import Session
 from app.settings import settings
 
@@ -33,9 +34,15 @@ def _csv_upload() -> UploadFile:
 
 
 def _compare_once(session: Session, judge: str, choose_left: bool) -> None:
-    left, right = session.get_pair(judge, force=False)
+    left, right = session.get_pair(PairRequestModel(uuid=judge, force=False))
     winner = left.id if choose_left else right.id
-    session.submit_pair(judge, left.id, right.id, winner)
+    session.submit_pair(
+        ComparisonInputModel(
+            uuid=judge,
+            entity_ids=(left.id, right.id),
+            winner_id=winner,
+        )
+    )
     session.worker.flush()
 
 
@@ -83,4 +90,9 @@ def test_crash_route_exits_the_process(monkeypatch):
 
 
 def _paths(application) -> set[str]:
-    return {getattr(route, "path", None) for route in application.routes}
+    paths: set[str] = set()
+    for route in application.routes:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            paths.add(path)
+    return paths

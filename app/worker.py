@@ -1,26 +1,34 @@
-from dataclasses import dataclass, field
 import logging
 import queue
 import threading
+from dataclasses import dataclass
 
 import numpy as np
+from peewee import DoesNotExist
 
-from app.adapters import AssignmentAdapter, EntityAdapter, SnapshotAdapter, WriteAheadAdapter
+from app.adapters import (
+    AssignmentAdapter,
+    EntityAdapter,
+    SnapshotAdapter,
+    WriteAheadAdapter,
+)
 from app.algorithm import BayesianDecisionProcess
 from app.db import db
+from app.entity import Entity
 from app.exceptions import IncorrectPairFormatException, JudgeDoesNotOwnPairException
 from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
+CommandPayload = int | PairRequestModel | ComparisonInputModel | None
+
 
 @dataclass
 class Command:
     name: str
-    payload: object = None
-    reply: queue.Queue = field(default_factory=queue.Queue)
-    answered: bool = False
+    reply: queue.Queue
+    payload: CommandPayload = None
 
 
 class JudgeWorker:
@@ -45,10 +53,9 @@ class JudgeWorker:
         self.wal = wal
         self.channel: queue.Queue[Command] = queue.Queue()
         self.bdp: BayesianDecisionProcess | None = None
-        self.recovered = False
         self._updates = 0
-        self._rankings: list = []
-        self._has_bdp = False
+        self._entities: list[Entity] | None = None
+        self._rankings: list[Entity] | None = None
         self._lock = threading.Lock()
         self._ready = threading.Event()
         self._bootstrap_error: Exception | None = None
@@ -70,19 +77,19 @@ class JudgeWorker:
 
     def has_bdp(self) -> bool:
         with self._lock:
-            return self._has_bdp
+            return self._rankings is not None
 
-    def rankings(self) -> list:
+    def rankings(self) -> list[Entity]:
         with self._lock:
-            if not self._has_bdp:
+            if self._rankings is None:
                 raise AttributeError("bdp")
             return list(self._rankings)
 
     def reset(self, entity_count: int) -> None:
         self._call("reset", entity_count)
 
-    def request_pair(self, judge: str, force: bool):
-        return self._call("get_pair", (judge, force))
+    def request_pair(self, pair_request: PairRequestModel) -> tuple[EntityWithId, EntityWithId]:
+        return self._call("get_pair", pair_request)
 
     def submit(self, comparison: ComparisonInputModel) -> None:
         self._call("submit", comparison)
@@ -96,7 +103,7 @@ class JudgeWorker:
     def alphas(self) -> np.ndarray:
         return self._call("alphas")
 
-    def _call(self, name: str, payload: object = None):
+    def _call(self, name: str, payload: CommandPayload = None):
         reply: queue.Queue = queue.Queue(maxsize=1)
         self.channel.put(Command(name=name, payload=payload, reply=reply))
         result = reply.get()
@@ -124,7 +131,7 @@ class JudgeWorker:
                         return
                 except Exception as exc:
                     logger.exception("Judge worker command %s failed", command.name)
-                    self._reply(command, exc)
+                    command.reply.put(exc)
         finally:
             if not db.is_closed():
                 db.close()
@@ -137,27 +144,27 @@ class JudgeWorker:
         timestamp, bdp_instance = snapshot
         self.wal.replay(timestamp, bdp_instance)
         self.bdp = bdp_instance
+        self._entities = self.entities.to_list()
         self._publish()
-        self.recovered = True
         logger.info("Replayed write-ahead log from snapshot %s", timestamp)
 
     def _handle(self, command: Command) -> bool:
         if command.name == "stop":
-            self._reply(command, None)
+            command.reply.put(None)
             return True
         if command.name == "flush":
-            self._reply(command, None)
+            command.reply.put(None)
             return False
         if command.name == "snapshot":
             self._snapshot()
-            self._reply(command, None)
+            command.reply.put(None)
             return False
         if command.name == "alphas":
-            self._reply(command, self.bdp.get_alphas().copy())
+            command.reply.put(self._require_bdp().get_alphas())
             return False
         if command.name == "reset":
             self._reset(command.payload)
-            self._reply(command, None)
+            command.reply.put(None)
             return False
         if command.name == "get_pair":
             self._get_pair(command)
@@ -167,29 +174,34 @@ class JudgeWorker:
             return False
         raise RuntimeError(f"Unknown judge command: {command.name}")
 
-    def _reset(self, entity_count: int) -> None:
-        self.bdp = BayesianDecisionProcess(K=entity_count)
+    def _reset(self, entity_count: CommandPayload) -> None:
+        if not isinstance(entity_count, int):
+            raise TypeError("reset command is missing an entity count")
+        self.bdp = BayesianDecisionProcess.create(entity_count)
         self._updates = 0
+        self._entities = self.entities.to_list()
         self._publish()
 
     def _get_pair(self, command: Command):
-        judge, force = command.payload
-        self.wal.log(PairRequestModel(uuid=judge, force=force))
-        if not force and judge in self.assignments:
-            i, j = self.assignments[judge]
+        pair_request = command.payload
+        if not isinstance(pair_request, PairRequestModel):
+            raise TypeError("get_pair command is missing a pair request")
+        self.wal.log(pair_request)
+        assigned = None if pair_request.force else self._current_assignment(pair_request.uuid)
+        if assigned is None:
+            i, j = self._require_bdp().get_next_pair()
+            self.assignments[pair_request.uuid] = (i, j)
         else:
-            i, j = self.bdp.get_next_pair()
-            self.assignments[judge] = (i, j)
-            self._note_update()
+            i, j = assigned
 
-        pair = (
-            EntityWithId(**self.entities[i].model_dump(), id=i),
-            EntityWithId(**self.entities[j].model_dump(), id=j),
-        )
-        self._reply(command, pair)
+        command.reply.put(self._pair(i, j))
+        if assigned is None:
+            self._after_ack(command, self._note_update)
 
     def _submit(self, command: Command) -> None:
-        comparison: ComparisonInputModel = command.payload
+        comparison = command.payload
+        if not isinstance(comparison, ComparisonInputModel):
+            raise TypeError("submit command is missing a comparison")
         judge = comparison.uuid
         entity_id_1, entity_id_2 = comparison.entity_ids
         winner_id = comparison.winner_id
@@ -206,25 +218,56 @@ class JudgeWorker:
             raise IncorrectPairFormatException()
 
         self.wal.log(comparison)
-        self._reply(command, None)
+        command.reply.put(None)
 
-        self.bdp.submit_comparison(entity_id_1, entity_id_2, winner_id)
-        del self.assignments[judge]
-        self._publish()
-        self._note_update()
-        logger.info(
-            "Applied comparison from %s: %s beat %s",
-            judge,
-            winner_id,
-            entity_id_2 if winner_id == entity_id_1 else entity_id_1,
+        def apply() -> None:
+            self._require_bdp().submit_comparison(entity_id_1, entity_id_2, winner_id)
+            del self.assignments[judge]
+            self._publish()
+            self._note_update()
+            logger.info(
+                "Applied comparison from %s: %s beat %s",
+                judge,
+                winner_id,
+                entity_id_2 if winner_id == entity_id_1 else entity_id_1,
+            )
+
+        self._after_ack(command, apply)
+
+    def _after_ack(self, command: Command, apply) -> None:
+        try:
+            apply()
+        except Exception:
+            logger.exception("Judge worker command %s failed after ack", command.name)
+
+    def _current_assignment(self, judge: str) -> tuple[int, int] | None:
+        try:
+            return self.assignments[judge]
+        except DoesNotExist:
+            return None
+
+    def _require_bdp(self) -> BayesianDecisionProcess:
+        if self.bdp is None:
+            raise RuntimeError("Judge model is not initialized")
+        return self.bdp
+
+    def _require_entities(self) -> list[Entity]:
+        if self._entities is None:
+            self._entities = self.entities.to_list()
+        return self._entities
+
+    def _pair(self, i: int, j: int) -> tuple[EntityWithId, EntityWithId]:
+        entities = self._require_entities()
+        return (
+            EntityWithId(**entities[i].model_dump(), id=i),
+            EntityWithId(**entities[j].model_dump(), id=j),
         )
 
     def _publish(self) -> None:
-        sorted_indices = np.flip(np.argsort(self.bdp.get_alphas()))
-        entities = self.entities.to_list()
-        rankings = [entities[int(i)] for i in sorted_indices]
+        entities = self._require_entities()
+        order = np.flip(np.argsort(self._require_bdp().get_alphas()))
+        rankings = [entities[int(i)] for i in order]
         with self._lock:
-            self._has_bdp = True
             self._rankings = rankings
 
     def _note_update(self) -> None:
@@ -235,10 +278,4 @@ class JudgeWorker:
 
     def _snapshot(self) -> None:
         logger.info("Taking snapshot")
-        self.snapshots.record(self.bdp)
-
-    def _reply(self, command: Command, value) -> None:
-        if command.answered:
-            return
-        command.answered = True
-        command.reply.put(value)
+        self.snapshots.record(self._require_bdp())

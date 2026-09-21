@@ -1,8 +1,7 @@
-from pydantic import BaseModel
-from fastapi import UploadFile
-from typing import List
 
 import pandas as pd
+from fastapi import UploadFile
+from pydantic import BaseModel
 
 
 class Entity(BaseModel):
@@ -12,7 +11,7 @@ class Entity(BaseModel):
     tracks: str
 
     @staticmethod
-    def list_from_csv(raw_csv: UploadFile) -> List["Entity"]:
+    def list_from_csv(raw_csv: UploadFile) -> list[Entity]:
         df = pd.read_csv(raw_csv.file)
         df["Table Number"] = df["Table Number"].fillna("").astype(str)
         entities = []
@@ -20,14 +19,17 @@ class Entity(BaseModel):
 
         for i, (_, row) in enumerate(filtered_df.iterrows()):
             track_value = row.get("M Hacks Main Track", None)
+            tracks = (
+                str(track_value)
+                if track_value is not None and not pd.isna(track_value)
+                else "No Track"
+            )
             entities.append(
                 Entity(
-                    project_name=row["Project Title"],
-                    devpost_link=row["Submission Url"],
-                    table_num=row["Table Number"],
-                    tracks=track_value
-                    if track_value is not None and not pd.isna(track_value)
-                    else "No Track",
+                    project_name=str(row["Project Title"]),
+                    devpost_link=str(row["Submission Url"]),
+                    table_num=str(row["Table Number"]),
+                    tracks=tracks,
                 )
             )
 

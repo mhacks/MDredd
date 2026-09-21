@@ -1,14 +1,13 @@
-from fastapi import UploadFile
-from typing import Tuple, List
 import json
 import logging
 import time
 
-from app.algorithm import BayesianDecisionProcess
+from fastapi import UploadFile
 
+from app.algorithm import BayesianDecisionProcess
+from app.db import AssignmentTable, EntityTable, SnapshotTable, WriteAheadTable, db
 from app.entity import Entity
 from app.models import ComparisonInputModel, PairRequestModel
-from app.db import db, EntityTable, WriteAheadTable, SnapshotTable, AssignmentTable
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ class EntityAdapter:
         record = EntityTable.get(EntityTable.id == (id + 1))  # SQLite IDs start at 1
         return Entity(**json.loads(record.data))
 
-    def to_list(self) -> List[Entity]:
+    def to_list(self) -> list[Entity]:
         records = EntityTable.select().order_by(EntityTable.id)
         entities = [Entity(**json.loads(record.data)) for record in records]
         return entities
@@ -34,7 +33,7 @@ class EntityAdapter:
         db.drop_tables([EntityTable], safe=True)
         db.create_tables([EntityTable], safe=True)
 
-    def load(self, raw_csv: UploadFile = None):
+    def load(self, raw_csv: UploadFile | None = None):
         if raw_csv is not None:
             self.clear()
             entities = Entity.list_from_csv(raw_csv)
@@ -70,7 +69,7 @@ class SnapshotAdapter:
 
             SnapshotTable.delete().where(SnapshotTable.id.in_(subquery)).execute()
 
-    def load(self) -> Tuple[int, BayesianDecisionProcess] | None:
+    def load(self) -> tuple[int, BayesianDecisionProcess] | None:
         record = SnapshotTable.select().order_by(SnapshotTable.timestamp.desc()).first()
 
         if record is not None:
@@ -130,7 +129,7 @@ class WriteAheadAdapter:
             case PairRequestModel():
                 event_type = "get_pair"
             case _:
-                raise
+                raise TypeError(f"Unsupported write-ahead record: {type(log_data).__name__}")
 
         WriteAheadTable.create(
             event=event_type, timestamp=time.time(), params=log_data.model_dump_json()
@@ -157,4 +156,4 @@ class WriteAheadAdapter:
                         submit_params.winner_id,
                     )
                 case _:
-                    raise
+                    raise ValueError(f"Unknown write-ahead event: {record.event}")
