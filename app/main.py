@@ -7,9 +7,8 @@ from typing import TypedDict
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from strawberry.fastapi import GraphQLRouter
 
-from app.api.schema import build_schema, get_context
+from app.api import graphql_router
 from app.session import Session
 
 logger = logging.getLogger(__name__)
@@ -31,14 +30,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
 
 def create_app() -> FastAPI:
     application = FastAPI(lifespan=lifespan)
-    application.include_router(
-        GraphQLRouter(
-            build_schema(),
-            context_getter=get_context,
-            multipart_uploads_enabled=True,
-        ),
-        prefix="/graphql",
-    )
+    application.include_router(graphql_router())
 
     application.add_middleware(
         CORSMiddleware,

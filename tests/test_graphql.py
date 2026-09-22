@@ -46,7 +46,7 @@ def _graphql(
     query: str,
     variables: dict[str, object] | None = None,
 ) -> dict[str, Any]:
-    response = client.post("/graphql", json={"query": query, "variables": variables or {}})
+    response = client.post("/", json={"query": query, "variables": variables or {}})
     assert response.status_code == 200
     payload: object = response.json()
     assert isinstance(payload, dict)
@@ -82,7 +82,7 @@ def _start(client: TestClient) -> None:
         "variables": {"file": None},
     }
     response = client.post(
-        "/graphql",
+        "/",
         files={
             "operations": (None, json.dumps(operations), "application/json"),
             "map": (None, json.dumps({"0": ["variables.file"]}), "application/json"),
@@ -286,7 +286,7 @@ def test_rankings_updated_is_pushed_when_the_worker_publishes(client: TestClient
 
     def listen() -> None:
         with client.websocket_connect(
-            "/graphql", subprotocols=["graphql-transport-ws"]
+            "/", subprotocols=["graphql-transport-ws"]
         ) as websocket:
             websocket.send_json({"type": "connection_init"})
             ack = websocket.receive_json()
