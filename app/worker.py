@@ -250,15 +250,26 @@ class JudgeWorker:
 
     def _pair(self, i: int, j: int) -> tuple[EntityWithId, EntityWithId]:
         entities = self._require_entities()
-        return (
-            EntityWithId(**entities[i].model_dump(), id=i),
-            EntityWithId(**entities[j].model_dump(), id=j),
+        return (self._with_id(entities[i], i), self._with_id(entities[j], j))
+
+    def _with_id(self, entity: Entity, index: int) -> EntityWithId:
+        return EntityWithId(
+            project_name=entity.project_name,
+            devpost_link=entity.devpost_link,
+            table_num=entity.table_num,
+            tracks=entity.tracks,
+            id=index,
         )
 
     def _publish(self) -> None:
         entities = self._require_entities()
-        order = np.flip(np.argsort(self._require_bdp().get_alphas()))
-        rankings = [entities[int(i)] for i in order]
+        alphas = np.asarray(self._require_bdp().get_alphas(), dtype=np.float64)
+        ranked_ids = sorted(
+            range(len(entities)),
+            key=lambda index: alphas[index],
+            reverse=True,
+        )
+        rankings = [entities[index] for index in ranked_ids]
         with self._lock:
             self._rankings = rankings
 

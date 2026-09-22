@@ -18,11 +18,9 @@ dependencies = [
 pythonVersion = "3.14"
 venvPath = "."
 venv = ".venv"
-typeCheckingMode = "recommended"
-reportAny = "none"
-reportUnknownVariableType = "none"
-reportUnknownMemberType = "none"
-reportUnknownArgumentType = "none"
-reportUnknownLambdaType = "none"
-reportUnknownParameterType = "none"
-reportMissingTypeStubs = "none"
+typeCheckingMode = "standard"
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=3.0.5.260914",
+]

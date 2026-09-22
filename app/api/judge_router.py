@@ -10,6 +10,7 @@ from app.models import (
     PairRequestModel,
     PairResponseModel,
 )
+from app.session import get_session
 
 logger = getLogger(__name__)
 judge_router = APIRouter(prefix="/judge", tags=["judge"])
@@ -17,7 +18,7 @@ judge_router = APIRouter(prefix="/judge", tags=["judge"])
 
 @judge_router.get("/pair", response_model=PairResponseModel)
 def get_pair(request: Request, pair_request: Annotated[PairRequestModel, Depends()]):
-    session = request.state.session
+    session = get_session(request)
 
     logger.info(
         "Got request for pair by %s (force=%s).",
@@ -42,7 +43,7 @@ def get_pair(request: Request, pair_request: Annotated[PairRequestModel, Depends
 
 @judge_router.post("/submit", response_model=GenericResponseModel)
 def submit_comparison(request: Request, comparison_request: ComparisonInputModel):
-    session = request.state.session
+    session = get_session(request)
     try:
         session.submit_pair(comparison_request)
         return {"message": "Successfully submitted pair!", "status_code": 200}
