@@ -1,5 +1,6 @@
 
 from fastapi import UploadFile
+from peewee import DoesNotExist
 
 from app.adapters import (
     AssignmentAdapter,
@@ -11,6 +12,7 @@ from app.exceptions import (
     JudgingAlreadyStartedException,
     JudgingNeverStartedException,
     JudgingNotStartedException,
+    UnknownRowException,
 )
 from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
 from app.worker import JudgeWorker
@@ -81,7 +83,19 @@ class Session:
 
         self.worker.submit(comparison)
 
-    def get_rankings(self):
+    def get_rankings(self) -> list[EntityWithId]:
         if not self.enabled:
             raise JudgingNotStartedException()
         return self.worker.rankings()
+
+    def columns(self) -> list[str]:
+        if len(self.entities) == 0:
+            return []
+        return list(self.entities[0].attributes)
+
+    def get_row(self, row_id: int) -> EntityWithId:
+        try:
+            entity = self.entities[row_id]
+        except DoesNotExist as exc:
+            raise UnknownRowException() from exc
+        return EntityWithId(attributes=entity.attributes, id=row_id)

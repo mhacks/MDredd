@@ -7,8 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from strawberry.fastapi import BaseContext
 
-from app.entity import Entity as DomainEntity
-from app.exceptions import JudgingFailure
+from app.exceptions import JudgingFailure, UnknownAttributeException
 from app.models import EntityWithId
 from app.session import Session
 
@@ -22,20 +21,23 @@ class GraphQLContext(BaseContext):
 
 
 @strawberry.type
-class Entity:
-    project_name: str
-    devpost_link: str
-    table_num: str
-    tracks: str
+class Attribute:
+    name: str
+    value: str
 
 
 @strawberry.type
-class AssignedEntity:
+class Row:
     id: int
-    project_name: str
-    devpost_link: str
-    table_num: str
-    tracks: str
+    values: strawberry.Private[dict[str, str]]
+
+    @strawberry.field
+    def attributes(self, names: list[str]) -> list[Attribute]:
+        unknown = [name for name in names if name not in self.values]
+        if unknown:
+            exc = UnknownAttributeException(unknown)
+            raise GraphQLError(str(exc), extensions={"code": exc.code}) from exc
+        return [Attribute(name=name, value=self.values[name]) for name in names]
 
 
 @strawberry.type
@@ -43,23 +45,8 @@ class JudgingSession:
     is_started: bool
 
 
-def to_entity(entity: DomainEntity) -> Entity:
-    return Entity(
-        project_name=entity.project_name,
-        devpost_link=entity.devpost_link,
-        table_num=entity.table_num,
-        tracks=entity.tracks,
-    )
-
-
-def to_assigned(entity: EntityWithId) -> AssignedEntity:
-    return AssignedEntity(
-        id=entity.id,
-        project_name=entity.project_name,
-        devpost_link=entity.devpost_link,
-        table_num=entity.table_num,
-        tracks=entity.tracks,
-    )
+def to_row(entity: EntityWithId) -> Row:
+    return Row(id=entity.id, values=dict(entity.attributes))
 
 
 async def run_judging(func: Callable[[], T]) -> T:

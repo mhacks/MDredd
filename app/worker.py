@@ -58,10 +58,10 @@ class JudgeWorker:
         self.bdp: BayesianDecisionProcess | None = None
         self._updates: int = 0
         self._entities: list[Entity] | None = None
-        self._rankings: list[Entity] | None = None
+        self._rankings: list[EntityWithId] | None = None
         self._lock: threading.Lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._subscribers: list[asyncio.Queue[list[Entity]]] = []
+        self._subscribers: list[asyncio.Queue[list[EntityWithId]]] = []
         self._subscriber_lock: threading.Lock = threading.Lock()
         self._ready: threading.Event = threading.Event()
         self._bootstrap_error: Exception | None = None
@@ -85,7 +85,7 @@ class JudgeWorker:
         with self._lock:
             return self._rankings is not None
 
-    def rankings(self) -> list[Entity]:
+    def rankings(self) -> list[EntityWithId]:
         with self._lock:
             if self._rankings is None:
                 raise AttributeError("bdp")
@@ -94,13 +94,13 @@ class JudgeWorker:
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
-    def subscribe_rankings(self) -> asyncio.Queue[list[Entity]]:
-        subscriber: asyncio.Queue[list[Entity]] = asyncio.Queue()
+    def subscribe_rankings(self) -> asyncio.Queue[list[EntityWithId]]:
+        subscriber: asyncio.Queue[list[EntityWithId]] = asyncio.Queue()
         with self._subscriber_lock:
             self._subscribers.append(subscriber)
         return subscriber
 
-    def unsubscribe_rankings(self, subscriber: asyncio.Queue[list[Entity]]) -> None:
+    def unsubscribe_rankings(self, subscriber: asyncio.Queue[list[EntityWithId]]) -> None:
         with self._subscriber_lock:
             if subscriber in self._subscribers:
                 self._subscribers.remove(subscriber)
@@ -275,13 +275,7 @@ class JudgeWorker:
         return (self._with_id(entities[i], i), self._with_id(entities[j], j))
 
     def _with_id(self, entity: Entity, index: int) -> EntityWithId:
-        return EntityWithId(
-            project_name=entity.project_name,
-            devpost_link=entity.devpost_link,
-            table_num=entity.table_num,
-            tracks=entity.tracks,
-            id=index,
-        )
+        return EntityWithId(attributes=dict(entity.attributes), id=index)
 
     def _publish(self) -> None:
         entities = self._require_entities()
@@ -291,12 +285,12 @@ class JudgeWorker:
             key=lambda index: alphas[index],
             reverse=True,
         )
-        rankings = [entities[index] for index in ranked_ids]
+        rankings = [self._with_id(entities[index], index) for index in ranked_ids]
         with self._lock:
             self._rankings = rankings
         self._broadcast(rankings)
 
-    def _broadcast(self, rankings: list[Entity]) -> None:
+    def _broadcast(self, rankings: list[EntityWithId]) -> None:
         loop = self._loop
         if loop is None or loop.is_closed():
             return

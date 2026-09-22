@@ -2,7 +2,7 @@ import logging
 
 import strawberry
 
-from app.api.types import AssignedEntity, GraphQLContext, run_judging, to_assigned
+from app.api.types import GraphQLContext, Row, run_judging, to_row
 from app.exceptions import IncorrectPairFormatException
 from app.models import ComparisonInputModel, PairRequestModel
 
@@ -17,12 +17,12 @@ class JudgeQuery:
         info: strawberry.Info[GraphQLContext],
         judge_id: str,
         force: bool = False,
-    ) -> list[AssignedEntity]:
+    ) -> list[Row]:
         logger.info("Got request for pair by %s (force=%s).", judge_id, force)
         session = info.context.session
         request = PairRequestModel(uuid=judge_id, force=force)
         left, right = await run_judging(lambda: session.get_pair(request))
-        return [to_assigned(left), to_assigned(right)]
+        return [to_row(left), to_row(right)]
 
 
 @strawberry.type

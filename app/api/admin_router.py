@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 import strawberry
 from fastapi import UploadFile
 
-from app.api.types import Entity, GraphQLContext, JudgingSession, run_judging, to_entity
+from app.api.types import GraphQLContext, JudgingSession, Row, run_judging, to_row
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +16,20 @@ class AdminQuery:
         return JudgingSession(is_started=info.context.session.get_enabled())
 
     @strawberry.field
-    async def rankings(self, info: strawberry.Info[GraphQLContext]) -> list[Entity]:
+    def columns(self, info: strawberry.Info[GraphQLContext]) -> list[str]:
+        return info.context.session.columns()
+
+    @strawberry.field
+    async def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Row:
+        session = info.context.session
+        entity = await run_judging(lambda: session.get_row(id))
+        return to_row(entity)
+
+    @strawberry.field
+    async def rankings(self, info: strawberry.Info[GraphQLContext]) -> list[Row]:
         session = info.context.session
         rankings = await run_judging(session.get_rankings)
-        return [to_entity(entity) for entity in rankings]
+        return [to_row(entity) for entity in rankings]
 
 
 @strawberry.type
@@ -55,12 +65,12 @@ class AdminSubscription:
     @strawberry.subscription
     async def rankings_updated(
         self, info: strawberry.Info[GraphQLContext]
-    ) -> AsyncGenerator[list[Entity]]:
+    ) -> AsyncGenerator[list[Row]]:
         session = info.context.session
         subscriber = session.worker.subscribe_rankings()
         try:
             while True:
                 rankings = await subscriber.get()
-                yield [to_entity(entity) for entity in rankings]
+                yield [to_row(entity) for entity in rankings]
         finally:
             session.worker.unsubscribe_rankings(subscriber)

@@ -38,3 +38,17 @@ class IncorrectPairFormatException(JudgingFailure):
 
     def __init__(self, message: str = "This Judge did not submit a pair correctly!") -> None:
         super().__init__(message)
+
+
+class UnknownRowException(JudgingFailure):
+    code: ClassVar[str] = "UNKNOWN_ROW"
+
+    def __init__(self, message: str = "Unknown row") -> None:
+        super().__init__(message)
+
+
+class UnknownAttributeException(JudgingFailure):
+    code: ClassVar[str] = "UNKNOWN_ATTRIBUTE"
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__("Unknown attributes: " + ", ".join(names))
