@@ -1,5 +1,5 @@
 
-from fastapi import Request, UploadFile
+from fastapi import UploadFile
 
 from app.adapters import (
     AssignmentAdapter,
@@ -85,10 +85,3 @@ class Session:
         if not self.enabled:
             raise JudgingNotStartedException()
         return self.worker.rankings()
-
-
-def get_session(request: Request) -> Session:
-    session = request.state.session
-    if not isinstance(session, Session):
-        raise TypeError("Judging session is missing")
-    return session

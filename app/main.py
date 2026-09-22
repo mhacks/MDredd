@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -6,11 +7,10 @@ from typing import TypedDict
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from strawberry.fastapi import GraphQLRouter
 
-from app.api import admin_router, judge_router
-from app.api.dev_router import dev_router
+from app.api.schema import build_schema, get_context
 from app.session import Session
-from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class State(TypedDict):
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
     session = Session()
+    session.worker.bind_loop(asyncio.get_running_loop())
     try:
         yield {"session": session}
     finally:
@@ -30,10 +31,14 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
 
 def create_app() -> FastAPI:
     application = FastAPI(lifespan=lifespan)
-    application.include_router(admin_router)
-    application.include_router(judge_router)
-    if settings.ENABLE_CRASH_ROUTE:
-        application.include_router(dev_router)
+    application.include_router(
+        GraphQLRouter(
+            build_schema(),
+            context_getter=get_context,
+            multipart_uploads_enabled=True,
+        ),
+        prefix="/graphql",
+    )
 
     application.add_middleware(
         CORSMiddleware,

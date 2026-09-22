@@ -12,6 +12,7 @@ dependencies = [
     "peewee>=3.19.0",
     "pydantic-settings>=2.13.0",
     "requests>=2.32.5",
+    "strawberry-graphql[fastapi]>=0.327.7",
 ]
 
 [tool.basedpyright]
@@ -23,4 +24,9 @@ typeCheckingMode = "standard"
 [dependency-groups]
 dev = [
     "pandas-stubs>=3.0.5.260914",
+    "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
