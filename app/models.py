@@ -1,5 +1,6 @@
-from typing import List, Optional, Tuple
+
 from pydantic import BaseModel
+
 from app.entity import Entity
 
 
@@ -14,17 +15,17 @@ class GenericResponseModel(BaseModel):
 
 class PairResponseModel(GenericResponseModel):
     is_started: bool
-    pair: Optional[Tuple[EntityWithId, EntityWithId]] = None
+    pair: tuple[EntityWithId, EntityWithId] | None = None
 
 
 class RankingsResponseModel(GenericResponseModel):
     is_started: bool
-    rankings: List[Entity]
+    rankings: list[Entity]
 
 
 class ComparisonInputModel(BaseModel):
     uuid: str
-    entity_ids: Tuple[int, int]
+    entity_ids: tuple[int, int]
     winner_id: int
 
 

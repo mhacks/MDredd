@@ -1,14 +1,13 @@
-from fastapi import UploadFile
-from typing import Tuple, List
 import json
 import logging
 import time
 
-from app.algorithm import BayesianDecisionProcess
+from fastapi import UploadFile
 
+from app.algorithm import BayesianDecisionProcess
+from app.db import AssignmentTable, EntityTable, SnapshotTable, WriteAheadTable, db
 from app.entity import Entity
 from app.models import ComparisonInputModel, PairRequestModel
-from app.db import db, EntityTable, WriteAheadTable, SnapshotTable, AssignmentTable
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ class EntityAdapter:
         record = EntityTable.get(EntityTable.id == (id + 1))  # SQLite IDs start at 1
         return Entity(**json.loads(record.data))
 
-    def to_list(self) -> List[Entity]:
+    def to_list(self) -> list[Entity]:
         records = EntityTable.select().order_by(EntityTable.id)
         entities = [Entity(**json.loads(record.data)) for record in records]
         return entities
@@ -34,7 +33,7 @@ class EntityAdapter:
         db.drop_tables([EntityTable], safe=True)
         db.create_tables([EntityTable], safe=True)
 
-    def load(self, raw_csv: UploadFile = None):
+    def load(self, raw_csv: UploadFile | None = None):
         if raw_csv is not None:
             self.clear()
             entities = Entity.list_from_csv(raw_csv)
@@ -53,10 +52,14 @@ class SnapshotAdapter:
         db.create_tables([SnapshotTable], safe=True)
 
     def record(self, bdp_instance: BayesianDecisionProcess):
+        payload = {
+            "K": bdp_instance.K,
+            "alpha_t": bdp_instance.alpha_t.tolist(),
+            "frequency": bdp_instance.frequency.tolist(),
+            "key": bdp_instance.key.tolist(),
+        }
         with db.atomic():
-            SnapshotTable.create(
-                bdp=bdp_instance.model_dump_json(), timestamp=time.time()
-            )
+            _ = SnapshotTable.create(bdp=payload, timestamp=time.time())
 
             subquery = (
                 SnapshotTable.select(SnapshotTable.id)
@@ -66,12 +69,15 @@ class SnapshotAdapter:
 
             SnapshotTable.delete().where(SnapshotTable.id.in_(subquery)).execute()
 
-    def load(self) -> Tuple[int, BayesianDecisionProcess] | None:
+    def load(self) -> tuple[int, BayesianDecisionProcess] | None:
         record = SnapshotTable.select().order_by(SnapshotTable.timestamp.desc()).first()
 
         if record is not None:
             timestamp = record.timestamp
-            algo = BayesianDecisionProcess(**json.loads(record.bdp))
+            payload = record.bdp
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            algo = BayesianDecisionProcess(**payload)
             return (timestamp, algo)
         else:
             return None
@@ -81,11 +87,11 @@ class AssignmentAdapter:
     def __init__(self):
         db.create_tables([AssignmentTable], safe=True)
 
-    def __getitem__(self, uuid: str):
+    def __getitem__(self, uuid: str) -> tuple[int, int]:
         judge_row = AssignmentTable.get(AssignmentTable.judge_id == uuid)
-        return (judge_row.entity_id_1, judge_row.entity_id_2)
+        return (int(judge_row.entity_id_1), int(judge_row.entity_id_2))
 
-    def __setitem__(self, uuid: str, entities):
+    def __setitem__(self, uuid: str, entities: tuple[int, int]) -> None:
         AssignmentTable.replace(
             judge_id=uuid,
             entity_id_1=entities[0],
@@ -122,10 +128,8 @@ class WriteAheadAdapter:
                 event_type = "submit_pair"
             case PairRequestModel():
                 event_type = "get_pair"
-            case _:
-                raise
 
-        WriteAheadTable.create(
+        _ = WriteAheadTable.create(
             event=event_type, timestamp=time.time(), params=log_data.model_dump_json()
         )
 
@@ -141,7 +145,7 @@ class WriteAheadAdapter:
 
             match record.event:
                 case "get_pair":
-                    bdp_instance.get_next_pair()
+                    _ = bdp_instance.get_next_pair()
                 case "submit_pair":
                     submit_params = ComparisonInputModel(**params)
                     bdp_instance.submit_comparison(
@@ -150,4 +154,4 @@ class WriteAheadAdapter:
                         submit_params.winner_id,
                     )
                 case _:
-                    raise
+                    raise ValueError(f"Unknown write-ahead event: {record.event}")

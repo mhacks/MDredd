@@ -1,8 +1,16 @@
-from pydantic import BaseModel
-from fastapi import UploadFile
-from typing import List
+import math
 
 import pandas as pd
+from fastapi import UploadFile
+from pydantic import BaseModel
+
+
+def _text(value: object) -> str:
+    if value is None or value is pd.NA:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    return str(value)
 
 
 class Entity(BaseModel):
@@ -12,22 +20,19 @@ class Entity(BaseModel):
     tracks: str
 
     @staticmethod
-    def list_from_csv(raw_csv: UploadFile) -> List["Entity"]:
+    def list_from_csv(raw_csv: UploadFile) -> list[Entity]:
         df = pd.read_csv(raw_csv.file)
         df["Table Number"] = df["Table Number"].fillna("").astype(str)
-        entities = []
+        entities: list[Entity] = []
         filtered_df = df[df["Highest Step Completed"] == "Submit"]
 
-        for i, (_, row) in enumerate(filtered_df.iterrows()):
-            track_value = row.get("M Hacks Main Track", None)
+        for _, row in filtered_df.iterrows():
             entities.append(
                 Entity(
-                    project_name=row["Project Title"],
-                    devpost_link=row["Submission Url"],
-                    table_num=row["Table Number"],
-                    tracks=track_value
-                    if track_value is not None and not pd.isna(track_value)
-                    else "No Track",
+                    project_name=_text(row["Project Title"]),
+                    devpost_link=_text(row["Submission Url"]),
+                    table_num=_text(row["Table Number"]),
+                    tracks=_text(row.get("M Hacks Main Track")) or "No Track",
                 )
             )
 
