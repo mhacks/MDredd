@@ -1,23 +1,30 @@
+import logging
 from collections.abc import Callable
 from typing import TypeVar
 
 import strawberry
+from fastapi import HTTPException
 from graphql import GraphQLError
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from strawberry.fastapi import BaseContext
 
+from app.auth import AuthError, Principal, authenticate
 from app.exceptions import JudgingFailure, UnknownAttributeException
+from app.logging import request_id
 from app.models import EntityWithId
 from app.session import Session
 
 T = TypeVar("T")
 
+logger = logging.getLogger(__name__)
+
 
 class GraphQLContext(BaseContext):
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, principal: Principal) -> None:
         super().__init__()
         self.session = session
+        self.principal = principal
 
 
 @strawberry.type
@@ -57,7 +64,17 @@ async def run_judging(func: Callable[[], T]) -> T:
 
 
 async def get_context(connection: HTTPConnection) -> GraphQLContext:
+    if request_id.get() is None:
+        request_id.set(connection.headers.get("x-request-id"))
+    try:
+        principal = authenticate(connection.headers.get("authorization"))
+    except AuthError as exc:
+        logger.warning("Rejected request", extra={"reason": exc.reason, "status": "UNAUTHENTICATED"})
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHENTICATED", "reason": exc.reason},
+        ) from exc
     session = getattr(connection.state, "session", None)
     if not isinstance(session, Session):
         raise TypeError("Judging session is missing")
-    return GraphQLContext(session)
+    return GraphQLContext(session, principal)

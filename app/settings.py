@@ -1,6 +1,19 @@
-from typing import ClassVar
+from typing import ClassVar, Literal
 
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ApiKey(BaseModel):
+    key_hash: str
+    user_id: str
+    role: Literal["admin", "judge"]
+    pair_capacity: int | None = None
+    pair_refill_per_second: float | None = None
+    submit_capacity: int | None = None
+    submit_refill_per_second: float | None = None
+    admin_capacity: int | None = None
+    admin_refill_per_second: float | None = None
 
 
 class Settings(BaseSettings):
@@ -13,6 +26,13 @@ class Settings(BaseSettings):
     SNAPSHOT_INTERVAL: int = 10
     MAX_SNAPSHOTS: int = 10
     ENABLE_CRASH_ROUTE: bool = False
+    API_KEYS: list[ApiKey] = []
+    PAIR_CAPACITY: int = 6
+    PAIR_REFILL_PER_SECOND: float = 0.2
+    SUBMIT_CAPACITY: int = 2
+    SUBMIT_REFILL_PER_SECOND: float = 1 / 60
+    ADMIN_CAPACITY: int = 4
+    ADMIN_REFILL_PER_SECOND: float = 1 / 30
 
 
 settings = Settings()
