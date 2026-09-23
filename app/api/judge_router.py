@@ -1,46 +1,56 @@
+from typing import Any
+
 import strawberry
 
-from app.api.types import GraphQLContext, Row, run_judging, to_row
+from app.api.guard import pair_limit, submit_limit
+from app.api.types import GraphQLContext, run_judging
+from app.columns import Column, materialize_all
 from app.exceptions import IncorrectPairFormatException
 from app.models import ComparisonInputModel, PairRequestModel
 
-
-@strawberry.type
-class JudgeQuery:
-    @strawberry.field
-    async def pair(
-        self,
-        info: strawberry.Info[GraphQLContext],
-        force: bool = False,
-    ) -> list[Row]:
-        session = info.context.session
-        request = PairRequestModel(uuid=info.context.principal.user_id, force=force)
-        left, right = await run_judging(lambda: session.get_pair(request))
-        return [to_row(left), to_row(right)]
+JUDGE_ID = "api"
 
 
-@strawberry.type
-class JudgeMutation:
-    @strawberry.mutation
-    async def submit_comparison(
-        self,
-        info: strawberry.Info[GraphQLContext],
-        entity_ids: list[int],
-        winner_id: int,
-    ) -> bool:
-        session = info.context.session
-        user_id = info.context.principal.user_id
+def build_judge(
+    row_type: type[Any],
+    columns: list[Column],
+) -> tuple[type[Any], type[Any]]:
+    @strawberry.type
+    class JudgeQuery:
+        @strawberry.field(permission_classes=[pair_limit], graphql_type=list[row_type])
+        async def pair(
+            self,
+            info: strawberry.Info[GraphQLContext],
+            force: bool = False,
+        ) -> Any:
+            worker = info.context.session.worker
+            request = PairRequestModel(uuid=JUDGE_ID, force=force)
+            left, right = await run_judging(lambda: worker.request_pair(request))
+            return materialize_all(columns, row_type, [left, right])
 
-        def submit() -> None:
-            if len(entity_ids) != 2:
-                raise IncorrectPairFormatException()
-            session.submit_pair(
-                ComparisonInputModel(
-                    uuid=user_id,
-                    entity_ids=(entity_ids[0], entity_ids[1]),
-                    winner_id=winner_id,
+    @strawberry.type
+    class JudgeMutation:
+        @strawberry.mutation(permission_classes=[submit_limit])
+        async def submit_comparison(
+            self,
+            info: strawberry.Info[GraphQLContext],
+            entity_ids: list[int],
+            winner_id: int,
+        ) -> bool:
+            worker = info.context.session.worker
+
+            def submit() -> None:
+                if len(entity_ids) != 2:
+                    raise IncorrectPairFormatException()
+                worker.submit(
+                    ComparisonInputModel(
+                        uuid=JUDGE_ID,
+                        entity_ids=(entity_ids[0], entity_ids[1]),
+                        winner_id=winner_id,
+                    )
                 )
-            )
 
-        await run_judging(submit)
-        return True
+            await run_judging(submit)
+            return True
+
+    return JudgeQuery, JudgeMutation

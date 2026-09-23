@@ -1,38 +1,22 @@
-import strawberry
-from fastapi import UploadFile
+from starlette.routing import WebSocketRoute
 from strawberry.fastapi import GraphQLRouter
-from strawberry.file_uploads import UploadDefinition
-from strawberry.tools import merge_types
 
-from app.settings import settings
-
-from .admin_router import AdminMutation, AdminQuery, AdminSubscription
-from .dev_router import DevMutation
-from .guard import RequestGuard
-from .judge_router import JudgeMutation, JudgeQuery
-from .types import GraphQLContext, get_context
-
-
-def build_schema() -> strawberry.Schema:
-    mutations = [AdminMutation, JudgeMutation]
-    if settings.ENABLE_CRASH_ROUTE:
-        mutations.append(DevMutation)
-    return strawberry.Schema(
-        query=merge_types("Query", (AdminQuery, JudgeQuery)),
-        mutation=merge_types("Mutation", tuple(mutations)),
-        subscription=merge_types("Subscription", (AdminSubscription,)),
-        scalar_overrides={UploadFile: UploadDefinition},
-        extensions=[RequestGuard],
-    )
+from app.api.schema import bind_router, rebind_schema, schema_for_headers
+from app.api.types import GraphQLContext, get_context
 
 
 def graphql_router() -> GraphQLRouter[GraphQLContext, None]:
-    return GraphQLRouter(
-        build_schema(),
+    router = GraphQLRouter(
+        schema_for_headers([]),
         path="/",
         context_getter=get_context,
         multipart_uploads_enabled=True,
     )
+    router.routes[:] = [
+        route for route in router.routes if not isinstance(route, WebSocketRoute)
+    ]
+    bind_router(router)
+    return router
 
 
-__all__ = ["build_schema", "get_context", "graphql_router"]
+__all__ = ["get_context", "graphql_router", "rebind_schema", "schema_for_headers"]

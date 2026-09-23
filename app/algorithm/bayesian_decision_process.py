@@ -64,6 +64,14 @@ class BayesianDecisionProcess(BaseModel):
     def get_alphas(self) -> np.ndarray:
         return np.array(self.alpha_t)
 
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "K": self.K,
+            "alpha_t": self.alpha_t.tolist(),
+            "frequency": self.frequency.tolist(),
+            "key": self.key.tolist(),
+        }
+
     def submit_comparison(self, i: int, j: int, winner: int):
         Y_ij = 1 if winner == i else -1
         self.alpha_t = BayesianDecisionProcess.MM(self.alpha_t, i, j, Y_ij)

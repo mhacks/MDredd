@@ -2,53 +2,28 @@ import logging
 from collections.abc import Callable
 
 import strawberry
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from graphql import GraphQLError
 from starlette.concurrency import run_in_threadpool
-from starlette.requests import HTTPConnection
 from strawberry.fastapi import BaseContext
 
-from app.auth import AuthError, Principal, authenticate, bearer
-from app.exceptions import JudgingFailure, UnknownAttributeException
-from app.models import EntityWithId
+from app.auth import AuthError, authenticate, bearer
+from app.exceptions import InvalidColumnsException, JudgingFailure
 from app.session import Session
 
 logger = logging.getLogger(__name__)
 
 
 class GraphQLContext(BaseContext):
-    def __init__(self, session: Session, principal: Principal) -> None:
+    def __init__(self, session: Session) -> None:
         super().__init__()
         self.session = session
-        self.principal = principal
-
-
-@strawberry.type
-class Attribute:
-    name: str
-    value: str
-
-
-@strawberry.type
-class Row:
-    id: int
-    values: strawberry.Private[dict[str, str]]
-
-    @strawberry.field
-    def attributes(self, names: list[str]) -> list[Attribute]:
-        unknown = [name for name in names if name not in self.values]
-        if unknown:
-            raise graphql_code(UnknownAttributeException.code, names=unknown)
-        return [Attribute(name=name, value=self.values[name]) for name in names]
+        self.rate_limit_remaining: int | None = None
 
 
 @strawberry.type
 class JudgingSession:
     is_started: bool
-
-
-def to_row(entity: EntityWithId) -> Row:
-    return Row(id=entity.id, values=dict(entity.attributes))
 
 
 def graphql_code(code: str, **extra: object) -> GraphQLError:
@@ -58,19 +33,19 @@ def graphql_code(code: str, **extra: object) -> GraphQLError:
 async def run_judging[T](func: Callable[[], T]) -> T:
     try:
         return await run_in_threadpool(func)
-    except UnknownAttributeException as exc:
+    except InvalidColumnsException as exc:
         raise graphql_code(exc.code, names=exc.names) from exc
     except JudgingFailure as exc:
         raise graphql_code(exc.code) from exc
 
 
-async def get_context(connection: HTTPConnection) -> GraphQLContext:
+async def get_context(request: Request) -> GraphQLContext:
     try:
-        principal = authenticate(await bearer(connection))
+        authenticate(await bearer(request))
     except AuthError as exc:
         logger.warning("Rejected request", extra={"reason": exc.reason})
         raise HTTPException(status_code=401, detail={"code": exc.reason}) from exc
-    session = getattr(connection.state, "session", None)
+    session = getattr(request.state, "session", None)
     if not isinstance(session, Session):
         raise TypeError("Judging session is missing")
-    return GraphQLContext(session, principal)
+    return GraphQLContext(session)

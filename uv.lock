@@ -390,7 +390,7 @@ requires-dist = [
     { name = "jax", specifier = ">=0.9.0.1" },
     { name = "numpy", specifier = ">=2.4.2" },
     { name = "pandas", specifier = ">=3.0.0" },
-    { name = "peewee", specifier = ">=3.19.0" },
+    { name = "peewee", specifier = ">=4.5.1" },
     { name = "pydantic-settings", specifier = ">=2.13.0" },
     { name = "strawberry-graphql", extras = ["fastapi"], specifier = ">=0.327.7" },
 ]
@@ -518,11 +518,11 @@ wheels = [
 
 [[package]]
 name = "peewee"
-version = "3.19.0"
+version = "4.5.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/88/b0/79462b42e89764998756e0557f2b58a15610a5b4512fbbcccae58fba7237/peewee-3.19.0.tar.gz", hash = "sha256:f88292a6f0d7b906cb26bca9c8599b8f4d8920ebd36124400d0cbaaaf915511f", size = 974035, upload-time = "2026-01-07T17:24:59.597Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/9b/74f549937d7edfb75742f426347a7483b0aab70909e2250e44f067027094/peewee-4.5.1.tar.gz", hash = "sha256:8005cb45c54e1a282a2f24ddd583f0f7a80cd5d9c635d50d63f57c11d88c392a", size = 823179, upload-time = "2026-09-08T01:20:10.449Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/41/19c65578ef9a54b3083253c68a607f099642747168fe00f3a2bceb7c3a34/peewee-3.19.0-py3-none-any.whl", hash = "sha256:de220b94766e6008c466e00ce4ba5299b9a832117d9eb36d45d0062f3cfd7417", size = 411885, upload-time = "2026-01-07T17:24:58.33Z" },
+    { url = "https://files.pythonhosted.org/packages/13/90/3ddf6ef69090c63b6fe0d42b41e5dd3323d95dfe01eda6766305337be862/peewee-4.5.1-py3-none-any.whl", hash = "sha256:dbbdc93e9be08d1df49ceed48dc5d609bfeda6112848086f1f6c1f1debe70975", size = 193883, upload-time = "2026-09-08T01:20:09.027Z" },
 ]
 
 [[package]]

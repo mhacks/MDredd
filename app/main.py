@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -7,8 +6,9 @@ from typing import TypedDict
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
-from app.api import graphql_router
+from app.api import graphql_router, rebind_schema
 from app.logging import RequestIdMiddleware, configure_logging
 from app.session import Session
 from app.settings import settings
@@ -23,7 +23,7 @@ class State(TypedDict):
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
     session = Session()
-    session.worker.bind_loop(asyncio.get_running_loop())
+    rebind_schema(await run_in_threadpool(session.worker.get_headers))
     try:
         yield {"session": session}
     finally:

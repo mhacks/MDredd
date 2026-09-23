@@ -13,13 +13,11 @@ _HANDLER_NAME = "mdredd-json"
 _FIELDS = (
     "operation",
     "user_id",
-    "role",
     "status",
     "latency_ms",
     "rate_limit_remaining",
     "reason",
     "event",
-    "replayed",
     "entity_ids",
     "winner_id",
 )
@@ -64,7 +62,7 @@ class RequestIdMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket"):
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         found: str | None = None
