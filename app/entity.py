@@ -17,10 +17,11 @@ class Entity(BaseModel):
     attributes: dict[str, str]
 
     @staticmethod
-    def list_from_csv(raw_csv: UploadFile) -> list[Entity]:
+    def list_from_csv(raw_csv: UploadFile) -> tuple[list[str], list[Entity]]:
         frame = pd.read_csv(raw_csv.file, dtype=str, keep_default_na=False)
         columns = [str(column) for column in frame.columns]
-        entities: list[Entity] = []
-        for _, row in frame.iterrows():
-            entities.append(Entity(attributes={column: _text(row[column]) for column in columns}))
-        return entities
+        entities = [
+            Entity(attributes={column: _text(row[column]) for column in columns})
+            for _, row in frame.iterrows()
+        ]
+        return columns, entities

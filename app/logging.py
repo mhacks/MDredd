@@ -19,7 +19,6 @@ _FIELDS = (
     "rate_limit_remaining",
     "reason",
     "event",
-    "replayed",
     "entity_ids",
     "winner_id",
 )

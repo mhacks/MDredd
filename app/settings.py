@@ -23,8 +23,6 @@ class Settings(BaseSettings):
     )
 
     DB_FILE: str = "mdredd.db"
-    SNAPSHOT_INTERVAL: int = 10
-    MAX_SNAPSHOTS: int = 10
     ENABLE_CRASH_ROUTE: bool = False
     API_KEYS: list[ApiKey] = []
     PAIR_CAPACITY: int = 6

@@ -10,8 +10,7 @@ from starlette.requests import HTTPConnection
 from strawberry.fastapi import BaseContext
 
 from app.auth import AuthError, Principal, authenticate, bearer
-from app.exceptions import JudgingFailure, UnknownAttributeException
-from app.models import EntityWithId
+from app.exceptions import InvalidColumnsException, JudgingFailure
 from app.session import Session
 
 T = TypeVar("T")
@@ -24,34 +23,12 @@ class GraphQLContext(BaseContext):
         super().__init__()
         self.session = session
         self.principal = principal
-
-
-@strawberry.type
-class Attribute:
-    name: str
-    value: str
-
-
-@strawberry.type
-class Row:
-    id: int
-    values: strawberry.Private[dict[str, str]]
-
-    @strawberry.field
-    def attributes(self, names: list[str]) -> list[Attribute]:
-        unknown = [name for name in names if name not in self.values]
-        if unknown:
-            raise graphql_code(UnknownAttributeException.code, names=unknown)
-        return [Attribute(name=name, value=self.values[name]) for name in names]
+        self.rate_limit_remaining: int | None = None
 
 
 @strawberry.type
 class JudgingSession:
     is_started: bool
-
-
-def to_row(entity: EntityWithId) -> Row:
-    return Row(id=entity.id, values=dict(entity.attributes))
 
 
 def graphql_code(code: str, **extra: object) -> GraphQLError:
@@ -61,7 +38,7 @@ def graphql_code(code: str, **extra: object) -> GraphQLError:
 async def run_judging(func: Callable[[], T]) -> T:
     try:
         return await run_in_threadpool(func)
-    except UnknownAttributeException as exc:
+    except InvalidColumnsException as exc:
         raise graphql_code(exc.code, names=exc.names) from exc
     except JudgingFailure as exc:
         raise graphql_code(exc.code) from exc

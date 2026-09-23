@@ -8,7 +8,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import graphql_router
+from app.api import graphql_router, rebind_schema
 from app.logging import RequestIdMiddleware, configure_logging
 from app.session import Session
 
@@ -23,6 +23,7 @@ class State(TypedDict):
 async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
     session = Session()
     session.worker.bind_loop(asyncio.get_running_loop())
+    rebind_schema(session.headers())
     try:
         yield {"session": session}
     finally:
@@ -36,8 +37,8 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestIdMiddleware)
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8000", "*"],
-        allow_credentials=True,
+        allow_origins=["http://localhost:8000"],
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

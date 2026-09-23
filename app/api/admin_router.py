@@ -3,78 +3,63 @@ from collections.abc import AsyncGenerator
 import strawberry
 from fastapi import UploadFile
 
-from app.api.types import GraphQLContext, JudgingSession, Row, graphql_code, run_judging, to_row
-from app.ratelimit import limiter, subscriptions
+from app.api.types import GraphQLContext, graphql_code, run_judging
+from app.columns import graphql_columns
+from app.models import EntityWithId
+from app.ratelimit import subscriptions
 
 
-@strawberry.type
-class AdminQuery:
-    @strawberry.field
-    def session(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
-        return JudgingSession(is_started=info.context.session.get_enabled())
-
-    @strawberry.field
-    def columns(self, info: strawberry.Info[GraphQLContext]) -> list[str]:
-        return info.context.session.columns()
-
-    @strawberry.field
-    async def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Row:
-        session = info.context.session
-        entity = await run_judging(lambda: session.get_row(id))
-        return to_row(entity)
-
-    @strawberry.field
-    async def rankings(self, info: strawberry.Info[GraphQLContext]) -> list[Row]:
-        session = info.context.session
-        rankings = await run_judging(session.get_rankings)
-        return [to_row(entity) for entity in rankings]
+def session_started(info: strawberry.Info[GraphQLContext]) -> bool:
+    return info.context.session.get_enabled()
 
 
-@strawberry.type
-class AdminMutation:
-    @strawberry.mutation
-    async def start_judging(
-        self,
-        info: strawberry.Info[GraphQLContext],
-        entities_csv: UploadFile | None = None,
-    ) -> JudgingSession:
-        session = info.context.session
-        await run_judging(lambda: session.start(entities_csv))
-        return JudgingSession(is_started=session.get_enabled())
-
-    @strawberry.mutation
-    async def stop_judging(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
-        session = info.context.session
-        await run_judging(session.stop)
-        return JudgingSession(is_started=session.get_enabled())
-
-    @strawberry.mutation
-    async def resume_judging(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
-        session = info.context.session
-        await run_judging(session.resume)
-        return JudgingSession(is_started=session.get_enabled())
+def column_pairs(info: strawberry.Info[GraphQLContext]) -> list[tuple[str, str]]:
+    columns = graphql_columns(info.context.session.headers())
+    return [(column.field, column.header) for column in columns]
 
 
-@strawberry.type
-class AdminSubscription:
-    @strawberry.subscription
-    async def rankings_updated(
-        self, info: strawberry.Info[GraphQLContext]
-    ) -> AsyncGenerator[list[Row]]:
-        session = info.context.session
-        user_id = info.context.principal.user_id
-        if not subscriptions.try_acquire(user_id):
-            decision = limiter.try_consume(user_id, "pair")
-            if not decision.allowed:
-                raise graphql_code("RATE_LIMITED", retryAfterMs=decision.retry_after_ms)
-            raise graphql_code("SUBSCRIPTION_LIMIT")
+def load_row(info: strawberry.Info[GraphQLContext], row_id: int) -> EntityWithId:
+    return info.context.session.get_row(row_id)
+
+
+async def load_rankings(info: strawberry.Info[GraphQLContext]) -> list[EntityWithId]:
+    session = info.context.session
+    return await run_judging(session.get_rankings)
+
+
+async def start_judging(
+    info: strawberry.Info[GraphQLContext],
+    entities_csv: UploadFile | None,
+) -> bool:
+    session = info.context.session
+    return await run_judging(lambda: session.start(entities_csv))
+
+
+async def stop_judging(info: strawberry.Info[GraphQLContext]) -> bool:
+    session = info.context.session
+    await run_judging(session.stop)
+    return session.get_enabled()
+
+
+async def resume_judging(info: strawberry.Info[GraphQLContext]) -> bool:
+    session = info.context.session
+    await run_judging(session.resume)
+    return session.get_enabled()
+
+
+async def iter_rankings(
+    info: strawberry.Info[GraphQLContext],
+) -> AsyncGenerator[list[EntityWithId] | None]:
+    session = info.context.session
+    user_id = info.context.principal.user_id
+    if not subscriptions.try_acquire(user_id):
+        raise graphql_code("SUBSCRIPTION_LIMIT")
+    try:
+        subscriber = session.worker.subscribe_rankings()
         try:
-            subscriber = session.worker.subscribe_rankings()
-            try:
-                while True:
-                    rankings = await subscriber.get()
-                    yield [to_row(entity) for entity in rankings]
-            finally:
-                session.worker.unsubscribe_rankings(subscriber)
+            while True:
+                yield await subscriber.get()
         finally:
-            subscriptions.release(user_id)
+            session.worker.unsubscribe_rankings(subscriber)
+    finally:
+        subscriptions.release(user_id)

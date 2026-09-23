@@ -32,8 +32,8 @@ class UnknownRowException(JudgingFailure):
     code: ClassVar[str] = "UNKNOWN_ROW"
 
 
-class UnknownAttributeException(JudgingFailure):
-    code: ClassVar[str] = "UNKNOWN_ATTRIBUTE"
+class InvalidColumnsException(JudgingFailure):
+    code: ClassVar[str] = "INVALID_COLUMNS"
 
     def __init__(self, names: list[str]) -> None:
         self.names = names
