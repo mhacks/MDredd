@@ -8,8 +8,9 @@ from app.settings import settings
 
 from .admin_router import AdminMutation, AdminQuery, AdminSubscription
 from .dev_router import DevMutation
+from .guard import RequestGuard
 from .judge_router import JudgeMutation, JudgeQuery
-from .types import get_context
+from .types import GraphQLContext, get_context
 
 
 def build_schema() -> strawberry.Schema:
@@ -21,10 +22,11 @@ def build_schema() -> strawberry.Schema:
         mutation=merge_types("Mutation", tuple(mutations)),
         subscription=merge_types("Subscription", (AdminSubscription,)),
         scalar_overrides={UploadFile: UploadDefinition},
+        extensions=[RequestGuard],
     )
 
 
-def graphql_router() -> GraphQLRouter[object, None]:
+def graphql_router() -> GraphQLRouter[GraphQLContext, None]:
     return GraphQLRouter(
         build_schema(),
         path="/",

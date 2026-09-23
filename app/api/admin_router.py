@@ -1,12 +1,10 @@
-import logging
 from collections.abc import AsyncGenerator
 
 import strawberry
 from fastapi import UploadFile
 
-from app.api.types import GraphQLContext, JudgingSession, Row, run_judging, to_row
-
-logger = logging.getLogger(__name__)
+from app.api.types import GraphQLContext, JudgingSession, Row, graphql_code, run_judging, to_row
+from app.ratelimit import limiter, subscriptions
 
 
 @strawberry.type
@@ -40,21 +38,18 @@ class AdminMutation:
         info: strawberry.Info[GraphQLContext],
         entities_csv: UploadFile | None = None,
     ) -> JudgingSession:
-        logger.info("Got request to start judging.")
         session = info.context.session
         await run_judging(lambda: session.start(entities_csv))
         return JudgingSession(is_started=session.get_enabled())
 
     @strawberry.mutation
     async def stop_judging(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
-        logger.info("Got request to stop judging.")
         session = info.context.session
         await run_judging(session.stop)
         return JudgingSession(is_started=session.get_enabled())
 
     @strawberry.mutation
     async def resume_judging(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
-        logger.info("Got request to resume judging.")
         session = info.context.session
         await run_judging(session.resume)
         return JudgingSession(is_started=session.get_enabled())
@@ -67,10 +62,19 @@ class AdminSubscription:
         self, info: strawberry.Info[GraphQLContext]
     ) -> AsyncGenerator[list[Row]]:
         session = info.context.session
-        subscriber = session.worker.subscribe_rankings()
+        user_id = info.context.principal.user_id
+        if not subscriptions.try_acquire(user_id):
+            decision = limiter.try_consume(user_id, "pair")
+            if not decision.allowed:
+                raise graphql_code("RATE_LIMITED", retryAfterMs=decision.retry_after_ms)
+            raise graphql_code("SUBSCRIPTION_LIMIT")
         try:
-            while True:
-                rankings = await subscriber.get()
-                yield [to_row(entity) for entity in rankings]
+            subscriber = session.worker.subscribe_rankings()
+            try:
+                while True:
+                    rankings = await subscriber.get()
+                    yield [to_row(entity) for entity in rankings]
+            finally:
+                session.worker.unsubscribe_rankings(subscriber)
         finally:
-            session.worker.unsubscribe_rankings(subscriber)
+            subscriptions.release(user_id)

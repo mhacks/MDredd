@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import graphql_router
+from app.logging import RequestIdMiddleware, configure_logging
 from app.session import Session
 
 logger = logging.getLogger(__name__)
@@ -29,9 +30,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     application = FastAPI(lifespan=lifespan)
     application.include_router(graphql_router())
-
+    application.add_middleware(RequestIdMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:8000", "*"],

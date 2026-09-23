@@ -163,11 +163,14 @@ class JudgeWorker:
             return
 
         timestamp, bdp_instance = snapshot
-        self.wal.replay(timestamp, bdp_instance)
+        replayed = self.wal.replay(timestamp, bdp_instance)
         self.bdp = bdp_instance
         self._entities = self.entities.to_list()
         self._publish()
-        logger.info("Replayed write-ahead log from snapshot %s", timestamp)
+        logger.info(
+            "Replayed write-ahead log",
+            extra={"event": "replay", "replayed": replayed},
+        )
 
     def _handle(self, command: Command) -> bool:
         if command.name == "stop":
@@ -222,9 +225,12 @@ class JudgeWorker:
 
         if not self.assignments.verify(judge, entity_id_1, entity_id_2):
             logger.info(
-                "Rejected comparison from %s for %s",
-                judge,
-                (entity_id_1, entity_id_2),
+                "Rejected comparison",
+                extra={
+                    "event": "comparison_rejected",
+                    "user_id": judge,
+                    "entity_ids": [entity_id_1, entity_id_2],
+                },
             )
             raise JudgeDoesNotOwnPairException()
 
@@ -240,10 +246,13 @@ class JudgeWorker:
             self._publish()
             self._note_update()
             logger.info(
-                "Applied comparison from %s: %s beat %s",
-                judge,
-                winner_id,
-                entity_id_2 if winner_id == entity_id_1 else entity_id_1,
+                "Applied comparison",
+                extra={
+                    "event": "comparison",
+                    "user_id": judge,
+                    "entity_ids": [entity_id_1, entity_id_2],
+                    "winner_id": winner_id,
+                },
             )
 
         self._after_ack(command, apply)
@@ -310,5 +319,5 @@ class JudgeWorker:
             self._snapshot()
 
     def _snapshot(self) -> None:
-        logger.info("Taking snapshot")
+        logger.info("Wrote snapshot", extra={"event": "snapshot"})
         self.snapshots.record(self._require_bdp())

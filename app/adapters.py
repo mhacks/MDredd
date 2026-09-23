@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 
 from fastapi import UploadFile
@@ -9,8 +8,6 @@ from app.db import AssignmentTable, EntityTable, SnapshotTable, WriteAheadTable,
 from app.entity import Entity
 from app.models import ComparisonInputModel, PairRequestModel
 from app.settings import settings
-
-logger = logging.getLogger(__name__)
 
 
 class EntityAdapter:
@@ -133,19 +130,20 @@ class WriteAheadAdapter:
             event=event_type, timestamp=time.time(), params=log_data.model_dump_json()
         )
 
-    def replay(self, snapshot_time: int, bdp_instance: BayesianDecisionProcess) -> None:
+    def replay(self, snapshot_time: int, bdp_instance: BayesianDecisionProcess) -> dict[str, int]:
         records = (
             WriteAheadTable.select()
             .where(WriteAheadTable.timestamp > snapshot_time)
             .order_by(WriteAheadTable.timestamp.asc())
         )
+        counts = {"get_pair": 0, "submit_pair": 0}
         for record in records:
-            logger.info(f"Replaying log with timestamp: {record.timestamp}")
             params = json.loads(record.params)
 
             match record.event:
                 case "get_pair":
                     _ = bdp_instance.get_next_pair()
+                    counts["get_pair"] += 1
                 case "submit_pair":
                     submit_params = ComparisonInputModel(**params)
                     bdp_instance.submit_comparison(
@@ -153,5 +151,7 @@ class WriteAheadAdapter:
                         submit_params.entity_ids[1],
                         submit_params.winner_id,
                     )
+                    counts["submit_pair"] += 1
                 case _:
                     raise ValueError(f"Unknown write-ahead event: {record.event}")
+        return counts
