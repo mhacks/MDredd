@@ -1,4 +1,3 @@
-import types
 from typing import Any
 
 import strawberry
@@ -13,7 +12,6 @@ from app.api.guard import AccessLog
 from app.api.judge_router import build_judge
 from app.api.types import GraphQLContext
 from app.columns import Column, graphql_columns
-from app.models import EntityWithId
 from app.settings import settings
 
 _router: GraphQLRouter[GraphQLContext, None] | None = None
@@ -34,23 +32,9 @@ def make_row_type(columns: list[Column]) -> type[Any]:
     return strawberry.type(type("Row", (), namespace))
 
 
-def row_list(row_type: type[Any]) -> Any:
-    return types.GenericAlias(list, (row_type,))
-
-
-def materialize(
-    columns: list[Column], row_type: type[Any], entity: EntityWithId
-) -> Any:
-    payload: dict[str, object] = {"id": entity.id}
-    for column in columns:
-        payload[column.attr] = entity.attributes[column.header]
-    return row_type(**payload)
-
-
-def schema_for_headers(headers: list[str]) -> strawberry.Schema:
-    columns = graphql_columns(headers)
+def schema_for_columns(columns: list[Column]) -> strawberry.Schema:
     row_type = make_row_type(columns)
-    admin_query, admin_mutation = build_admin(row_type, columns)
+    admin_query, admin_mutation = build_admin(row_type, columns, rebind_columns)
     judge_query, judge_mutation = build_judge(row_type, columns)
     mutations: tuple[type[Any], ...] = (admin_mutation, judge_mutation)
     if settings.ENABLE_CRASH_ROUTE:
@@ -63,12 +47,20 @@ def schema_for_headers(headers: list[str]) -> strawberry.Schema:
     )
 
 
+def schema_for_headers(headers: list[str]) -> strawberry.Schema:
+    return schema_for_columns(graphql_columns(headers))
+
+
 def bind_router(router: GraphQLRouter[GraphQLContext, None]) -> None:
     global _router
     _router = router
 
 
-def rebind_schema(headers: list[str]) -> None:
+def rebind_columns(columns: list[Column]) -> None:
     if _router is None:
         raise RuntimeError("GraphQL router is not ready")
-    _router.schema = schema_for_headers(headers)
+    _router.schema = schema_for_columns(columns)
+
+
+def rebind_schema(headers: list[str]) -> None:
+    rebind_columns(graphql_columns(headers))

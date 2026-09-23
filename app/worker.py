@@ -32,7 +32,7 @@ from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
 logger = logging.getLogger(__name__)
 
 Job = Callable[[], object] | None
-Reply = queue.Queue[tuple[bool, object]]
+Reply = queue.Queue[object]
 
 
 class JudgeWorker:
@@ -50,7 +50,6 @@ class JudgeWorker:
         self.headers: list[str] = []
         self._entities: list[Entity] = []
         self._assignments: dict[str, tuple[int, int]] = {}
-        self._rankings: list[EntityWithId] | None = None
         self._ready = threading.Event()
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
@@ -72,16 +71,13 @@ class JudgeWorker:
         self._thread.join(timeout=5)
 
     def get_enabled(self) -> bool:
-        return self.enabled
+        return self._call(lambda: self.enabled)
 
     def get_headers(self) -> list[str]:
-        return list(self.headers)
+        return self._call(lambda: list(self.headers))
 
     def get_row(self, row_id: int) -> EntityWithId:
-        entities = self._entities
-        if row_id < 0 or row_id >= len(entities):
-            raise UnknownRowException()
-        return self._with_id(entities[row_id], row_id)
+        return self._call(lambda: self._row(row_id))
 
     def replace_entities(self, entities: list[Entity], headers: list[str]) -> None:
         self._call(lambda: self._replace_entities(entities, headers))
@@ -106,11 +102,9 @@ class JudgeWorker:
     def _call[T](self, fn: Callable[[], T]) -> T:
         reply: Reply = queue.Queue(maxsize=1)
         self.channel.put((fn, reply))
-        ok, result = reply.get()
-        if not ok:
-            if isinstance(result, Exception):
-                raise result
-            raise RuntimeError("Judge worker failed")
+        result = reply.get()
+        if isinstance(result, Exception):
+            raise result
         return cast(T, result)
 
     def _run(self) -> None:
@@ -129,38 +123,26 @@ class JudgeWorker:
             while True:
                 job, reply = self.channel.get()
                 if job is None:
-                    reply.put((True, None))
+                    reply.put(None)
                     return
                 try:
-                    reply.put((True, job()))
+                    reply.put(job())
                 except Exception as exc:
                     if not isinstance(exc, JudgingFailure):
                         logger.exception("Judge worker command failed")
-                    reply.put((False, exc))
+                    reply.put(exc)
         finally:
             close_db()
 
     def _bootstrap(self) -> None:
         open_db()
         self._install(load_state())
-        if self.bdp is not None:
-            self._publish()
 
     def _replace_entities(self, entities: list[Entity], headers: list[str]) -> None:
         if self.enabled:
             raise JudgingAlreadyStartedException()
         bdp = BayesianDecisionProcess.create(len(entities))
-        replace_state(list(headers), list(entities), bdp)
-        self._install(
-            JudgeRecord(
-                enabled=True,
-                headers=list(headers),
-                entities=list(entities),
-                assignments={},
-                bdp=bdp,
-            )
-        )
-        self._publish()
+        self._install(replace_state(headers, entities, bdp))
 
     def _set_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -184,14 +166,13 @@ class JudgeWorker:
         if assigned is not None:
             return self._pair(*assigned)
 
-        try:
+        def draw() -> tuple[int, int]:
             i, j = self._require_bdp().get_next_pair()
             self._assignments[pair_request.uuid] = (i, j)
             save_assignment(self._require_bdp(), pair_request.uuid, (i, j))
-        except Exception:
-            self._reload()
-            raise
-        return self._pair(i, j)
+            return i, j
+
+        return self._pair(*self._persist(draw))
 
     def _submit(self, comparison: ComparisonInputModel) -> None:
         if not self.enabled:
@@ -213,14 +194,12 @@ class JudgeWorker:
         if winner_id not in (entity_id_1, entity_id_2):
             raise IncorrectPairFormatException()
 
-        try:
+        def apply() -> None:
             self._require_bdp().submit_comparison(entity_id_1, entity_id_2, winner_id)
             del self._assignments[judge]
             save_comparison(self._require_bdp(), judge)
-        except Exception:
-            self._reload()
-            raise
-        self._publish()
+
+        self._persist(apply)
         logger.info(
             "Applied comparison",
             extra={
@@ -232,10 +211,12 @@ class JudgeWorker:
         )
 
     def _commit(self) -> None:
+        self._persist(lambda: save_enabled(self.enabled))
+
+    def _persist[T](self, write: Callable[[], T]) -> T:
         try:
-            save_enabled(self.enabled)
+            return write()
         except Exception:
-            logger.exception("Failed to commit judge state")
             self._reload()
             raise
 
@@ -248,10 +229,6 @@ class JudgeWorker:
 
     def _reload(self) -> None:
         self._install(load_state())
-        if self.bdp is not None:
-            self._publish()
-        else:
-            self._rankings = None
 
     def _require_bdp(self) -> BayesianDecisionProcess:
         if self.bdp is None:
@@ -264,21 +241,21 @@ class JudgeWorker:
             self._with_id(self._entities[j], j),
         )
 
+    def _row(self, row_id: int) -> EntityWithId:
+        entities = self._entities
+        if row_id < 0 or row_id >= len(entities):
+            raise UnknownRowException()
+        return self._with_id(entities[row_id], row_id)
+
     def _with_id(self, entity: Entity, index: int) -> EntityWithId:
         return EntityWithId(attributes=dict(entity.attributes), id=index)
 
     def _rankings_snapshot(self) -> list[EntityWithId]:
         if not self.enabled:
             raise JudgingNotStartedException()
-        if self._rankings is None:
-            raise RuntimeError("Judge model is not initialized")
-        return list(self._rankings)
-
-    def _publish(self) -> None:
         entities = self._entities
         alphas = np.asarray(self._require_bdp().get_alphas(), dtype=np.float64)
         ranked_ids = sorted(
             range(len(entities)), key=lambda index: alphas[index], reverse=True
         )
-        rankings = [self._with_id(entities[index], index) for index in ranked_ids]
-        self._rankings = rankings
+        return [self._with_id(entities[index], index) for index in ranked_ids]

@@ -83,38 +83,58 @@ def load_state() -> JudgeRecord:
             assignments=assignments,
             bdp=None,
         )
+    model = (
+        None
+        if judge.bdp is None
+        else BayesianDecisionProcess.model_validate(judge.bdp)
+    )
     return JudgeRecord(
-        enabled=bool(judge.enabled),
+        enabled=bool(judge.enabled) and model is not None,
         headers=list(judge.headers),
         entities=entities,
         assignments=assignments,
-        bdp=None
-        if judge.bdp is None
-        else BayesianDecisionProcess.model_validate(judge.bdp),
+        bdp=model,
     )
 
 
 def replace_state(
     headers: list[str], entities: list[Entity], bdp: BayesianDecisionProcess
-) -> None:
+) -> JudgeRecord:
+    record = JudgeRecord(
+        enabled=True,
+        headers=list(headers),
+        entities=list(entities),
+        assignments={},
+        bdp=bdp,
+    )
     with db.atomic():
         EntityRow.delete().execute()
         Assignment.delete().execute()
-        if entities:
+        if record.entities:
             EntityRow.insert_many(
                 [
                     {"id": index, "attributes": entity.attributes}
-                    for index, entity in enumerate(entities)
+                    for index, entity in enumerate(record.entities)
                 ]
             ).execute()
-        Judge.replace(id=1, enabled=True, headers=headers, bdp=bdp.snapshot()).execute()
+        Judge.replace(
+            id=1,
+            enabled=record.enabled,
+            headers=record.headers,
+            bdp=bdp.snapshot(),
+        ).execute()
+    return record
+
+
+def _store_model(bdp: BayesianDecisionProcess) -> None:
+    Judge.update(bdp=bdp.snapshot()).where(Judge.id == 1).execute()
 
 
 def save_assignment(
     bdp: BayesianDecisionProcess, judge_id: str, pair: tuple[int, int]
 ) -> None:
     with db.atomic():
-        Judge.update(bdp=bdp.snapshot()).where(Judge.id == 1).execute()
+        _store_model(bdp)
         Assignment.replace(
             judge_id=judge_id,
             entity_id_1=pair[0],
@@ -124,7 +144,7 @@ def save_assignment(
 
 def save_comparison(bdp: BayesianDecisionProcess, judge_id: str) -> None:
     with db.atomic():
-        Judge.update(bdp=bdp.snapshot()).where(Judge.id == 1).execute()
+        _store_model(bdp)
         Assignment.delete().where(Assignment.judge_id == judge_id).execute()
 
 

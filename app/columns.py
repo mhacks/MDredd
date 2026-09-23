@@ -1,8 +1,10 @@
 import keyword
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.exceptions import InvalidColumnsException
+from app.models import EntityWithId
 
 _GRAPHQL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -34,6 +36,21 @@ def graphql_columns(headers: list[str]) -> list[Column]:
     if invalid:
         raise InvalidColumnsException(invalid)
     return columns
+
+
+def materialize(
+    columns: list[Column], row_type: type[Any], entity: EntityWithId
+) -> Any:
+    payload: dict[str, object] = {"id": entity.id}
+    for column in columns:
+        payload[column.attr] = entity.attributes[column.header]
+    return row_type(**payload)
+
+
+def materialize_all(
+    columns: list[Column], row_type: type[Any], entities: list[EntityWithId]
+) -> list[Any]:
+    return [materialize(columns, row_type, entity) for entity in entities]
 
 
 def _field_name(header: str) -> str | None:

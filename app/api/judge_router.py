@@ -4,9 +4,9 @@ import strawberry
 
 from app.api.guard import pair_limit, submit_limit
 from app.api.types import GraphQLContext, run_judging
-from app.columns import Column
+from app.columns import Column, materialize_all
 from app.exceptions import IncorrectPairFormatException
-from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
+from app.models import ComparisonInputModel, PairRequestModel
 
 JUDGE_ID = "api"
 
@@ -15,16 +15,9 @@ def build_judge(
     row_type: type[Any],
     columns: list[Column],
 ) -> tuple[type[Any], type[Any]]:
-    from app.api.schema import materialize, row_list
-
-    listed = row_list(row_type)
-
-    def as_rows(entities: list[EntityWithId]) -> list[Any]:
-        return [materialize(columns, row_type, entity) for entity in entities]
-
     @strawberry.type
     class JudgeQuery:
-        @strawberry.field(permission_classes=[pair_limit], graphql_type=listed)
+        @strawberry.field(permission_classes=[pair_limit], graphql_type=list[row_type])
         async def pair(
             self,
             info: strawberry.Info[GraphQLContext],
@@ -33,7 +26,7 @@ def build_judge(
             worker = info.context.session.worker
             request = PairRequestModel(uuid=JUDGE_ID, force=force)
             left, right = await run_judging(lambda: worker.request_pair(request))
-            return as_rows([left, right])
+            return materialize_all(columns, row_type, [left, right])
 
     @strawberry.type
     class JudgeMutation:
