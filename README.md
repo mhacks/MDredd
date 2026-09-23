@@ -65,7 +65,7 @@ When a bucket is empty the response is a GraphQL error and the judge state is le
 {
   "errors": [
     {
-      "message": "Rate limit exceeded",
+      "message": "RATE_LIMITED",
       "extensions": {
         "code": "RATE_LIMITED",
         "retryAfterMs": 5000

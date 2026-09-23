@@ -68,11 +68,11 @@ class AdminSubscription:
             decision = limiter.try_consume(user_id, "pair")
             if not decision.allowed:
                 raise GraphQLError(
-                    "Rate limit exceeded",
+                    "RATE_LIMITED",
                     extensions={"code": "RATE_LIMITED", "retryAfterMs": decision.retry_after_ms},
                 )
             raise GraphQLError(
-                "One rankings subscription is already active",
+                "SUBSCRIPTION_LIMIT",
                 extensions={"code": "SUBSCRIPTION_LIMIT"},
             )
         try:

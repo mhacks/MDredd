@@ -58,45 +58,40 @@ class RequestGuard(SchemaExtension):
     def _authorize(self) -> None:
         context = self.execution_context.context
         if not isinstance(context, GraphQLContext):
-            self._reject("unauthenticated", "Unauthorized", "UNAUTHENTICATED")
+            raise RuntimeError("GraphQL context is missing a principal")
         self.fields = _root_fields(
             self.execution_context.graphql_document,
             self.execution_context.operation_name,
         )
         allowed = ADMIN_FIELDS if context.principal.role == "admin" else JUDGE_FIELDS
         if any(not field.startswith("__") and field not in allowed for field in self.fields):
-            self._reject("forbidden", "Forbidden", "FORBIDDEN", context)
+            self._reject("FORBIDDEN", context)
         operations = _limited_operations(self.fields)
         if not operations:
             return
         decision = limiter.try_consume_all(context.principal.user_id, operations)
         self.remaining = decision.remaining
         if not decision.allowed:
-            self._reject(
-                "rate_limited",
-                "Rate limit exceeded",
-                "RATE_LIMITED",
-                context,
-                decision.retry_after_ms,
-            )
+            self._reject("RATE_LIMITED", context, decision.retry_after_ms)
 
     def _reject(
         self,
-        reason: str,
-        message: str,
         code: str,
-        context: GraphQLContext | None = None,
+        context: GraphQLContext,
         retry_after_ms: int | None = None,
     ) -> NoReturn:
-        extra: dict[str, object] = {"reason": reason, "status": code}
-        if context is not None:
-            extra["user_id"] = context.principal.user_id
-            extra["role"] = context.principal.role
-        logger.warning("Rejected request", extra=extra)
+        logger.warning(
+            "Rejected request",
+            extra={
+                "reason": code,
+                "user_id": context.principal.user_id,
+                "role": context.principal.role,
+            },
+        )
         extensions: dict[str, object] = {"code": code}
         if retry_after_ms is not None:
             extensions["retryAfterMs"] = retry_after_ms
-        raise GraphQLError(message, extensions=extensions)
+        raise GraphQLError(code, extensions=extensions)
 
     def _log_access(self, started: float, status: str) -> None:
         context = self.execution_context.context
