@@ -1,7 +1,6 @@
 import logging
 import time
 from collections.abc import Iterator
-from typing import ClassVar, Literal
 
 from graphql import GraphQLError
 from strawberry.extensions import SchemaExtension
@@ -14,44 +13,30 @@ from app.ratelimit import limiter
 logger = logging.getLogger(__name__)
 
 
-def authorize(
-    info: Info[GraphQLContext],
-    role: Literal["admin", "judge"],
-    operation: str | None,
-) -> bool:
-    context = info.context
-    if not isinstance(context, GraphQLContext):
-        raise RuntimeError("GraphQL context is missing a principal")
-    if context.principal.role != role:
-        raise graphql_code("FORBIDDEN")
-    if operation is None:
+def limited(operation: str) -> type[BasePermission]:
+    def has_permission(
+        self: BasePermission,
+        source: object,
+        info: Info[GraphQLContext],
+        **kwargs: object,
+    ) -> bool:
+        context = info.context
+        if not isinstance(context, GraphQLContext):
+            raise TypeError("GraphQL context is missing")
+        decision = limiter.try_consume(operation)
+        context.rate_limit_remaining = decision.remaining
+        if not decision.allowed:
+            raise graphql_code("RATE_LIMITED", retryAfterMs=decision.retry_after_ms)
         return True
-    decision = limiter.try_consume(context.principal.user_id, operation)
-    context.rate_limit_remaining = decision.remaining
-    if not decision.allowed:
-        raise graphql_code("RATE_LIMITED", retryAfterMs=decision.retry_after_ms)
-    return True
+
+    return type(
+        f"limit_{operation}", (BasePermission,), {"has_permission": has_permission}
+    )
 
 
-class JudgePair(BasePermission):
-    role: ClassVar[Literal["admin", "judge"]] = "judge"
-    operation: ClassVar[str | None] = "pair"
-
-    def has_permission(self, source: object, info: Info[GraphQLContext], **kwargs: object) -> bool:
-        return authorize(info, self.role, self.operation)
-
-
-class JudgeSubmit(JudgePair):
-    operation: ClassVar[str | None] = "submit"
-
-
-class AdminRead(JudgePair):
-    role: ClassVar[Literal["admin", "judge"]] = "admin"
-    operation: ClassVar[str | None] = None
-
-
-class AdminWrite(AdminRead):
-    operation: ClassVar[str | None] = "admin"
+pair_limit = limited("pair")
+submit_limit = limited("submit")
+admin_limit = limited("admin")
 
 
 class AccessLog(SchemaExtension):
@@ -73,17 +58,17 @@ class AccessLog(SchemaExtension):
             self._log(started, status)
 
     def _log(self, started: float, status: str) -> None:
-        context = self.execution_context.context
         extra: dict[str, object] = {
             "operation": self.execution_context.operation_name or "",
             "status": status,
             "latency_ms": round((time.perf_counter() - started) * 1000, 3),
         }
-        if isinstance(context, GraphQLContext):
-            extra["user_id"] = context.principal.user_id
-            extra["role"] = context.principal.role
-            if context.rate_limit_remaining is not None:
-                extra["rate_limit_remaining"] = context.rate_limit_remaining
+        context = self.execution_context.context
+        if (
+            isinstance(context, GraphQLContext)
+            and context.rate_limit_remaining is not None
+        ):
+            extra["rate_limit_remaining"] = context.rate_limit_remaining
         logger.info("graphql request", extra=extra)
 
 

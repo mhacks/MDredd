@@ -1,16 +1,6 @@
-import math
-
 import pandas as pd
 from fastapi import UploadFile
 from pydantic import BaseModel
-
-
-def _text(value: object) -> str:
-    if value is None or value is pd.NA:
-        return ""
-    if isinstance(value, float) and math.isnan(value):
-        return ""
-    return str(value)
 
 
 class Entity(BaseModel):
@@ -21,7 +11,7 @@ class Entity(BaseModel):
         frame = pd.read_csv(raw_csv.file, dtype=str, keep_default_na=False)
         columns = [str(column) for column in frame.columns]
         entities = [
-            Entity(attributes={column: _text(row[column]) for column in columns})
+            Entity(attributes={column: str(row[column]) for column in columns})
             for _, row in frame.iterrows()
         ]
         return columns, entities

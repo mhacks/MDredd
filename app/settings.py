@@ -1,19 +1,6 @@
-from typing import ClassVar, Literal
+from typing import ClassVar
 
-from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-class ApiKey(BaseModel):
-    key_hash: str
-    user_id: str
-    role: Literal["admin", "judge"]
-    pair_capacity: int | None = None
-    pair_refill_per_second: float | None = None
-    submit_capacity: int | None = None
-    submit_refill_per_second: float | None = None
-    admin_capacity: int | None = None
-    admin_refill_per_second: float | None = None
 
 
 class Settings(BaseSettings):
@@ -24,7 +11,7 @@ class Settings(BaseSettings):
 
     DB_FILE: str = "mdredd.db"
     ENABLE_CRASH_ROUTE: bool = False
-    API_KEYS: list[ApiKey] = []
+    API_TOKEN: str = ""
     PAIR_CAPACITY: int = 6
     PAIR_REFILL_PER_SECOND: float = 0.2
     SUBMIT_CAPACITY: int = 2

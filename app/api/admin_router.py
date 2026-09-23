@@ -1,65 +1,85 @@
-from collections.abc import AsyncGenerator
+from typing import Any
 
 import strawberry
 from fastapi import UploadFile
 
-from app.api.types import GraphQLContext, graphql_code, run_judging
-from app.columns import graphql_columns
+from app.api.guard import admin_limit
+from app.api.types import GraphQLContext, JudgingSession, run_judging
+from app.columns import Column, graphql_columns
 from app.models import EntityWithId
-from app.ratelimit import subscriptions
 
 
-def session_started(info: strawberry.Info[GraphQLContext]) -> bool:
-    return info.context.session.get_enabled()
+@strawberry.type(name="Column")
+class ColumnRecord:
+    field: str
+    header: str
 
 
-def column_pairs(info: strawberry.Info[GraphQLContext]) -> list[tuple[str, str]]:
-    columns = graphql_columns(info.context.session.headers())
-    return [(column.field, column.header) for column in columns]
+def build_admin(
+    row_type: type[Any],
+    columns: list[Column],
+) -> tuple[type[Any], type[Any]]:
+    from app.api.schema import materialize, row_list
 
+    listed = row_list(row_type)
 
-def load_row(info: strawberry.Info[GraphQLContext], row_id: int) -> EntityWithId:
-    return info.context.session.get_row(row_id)
+    def as_rows(entities: list[EntityWithId]) -> list[Any]:
+        return [materialize(columns, row_type, entity) for entity in entities]
 
+    @strawberry.type
+    class AdminQuery:
+        @strawberry.field
+        def session(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
+            return JudgingSession(is_started=info.context.session.worker.get_enabled())
 
-async def load_rankings(info: strawberry.Info[GraphQLContext]) -> list[EntityWithId]:
-    session = info.context.session
-    return await run_judging(session.get_rankings)
+        @strawberry.field
+        def columns(self, info: strawberry.Info[GraphQLContext]) -> list[ColumnRecord]:
+            return [
+                ColumnRecord(field=column.field, header=column.header)
+                for column in graphql_columns(info.context.session.worker.get_headers())
+            ]
 
+        @strawberry.field(graphql_type=row_type)
+        def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Any:
+            return materialize(
+                columns, row_type, info.context.session.worker.get_row(id)
+            )
 
-async def start_judging(
-    info: strawberry.Info[GraphQLContext],
-    entities_csv: UploadFile | None,
-) -> bool:
-    session = info.context.session
-    return await run_judging(lambda: session.start(entities_csv))
+        @strawberry.field(graphql_type=listed)
+        async def rankings(self, info: strawberry.Info[GraphQLContext]) -> Any:
+            worker = info.context.session.worker
+            return as_rows(await run_judging(worker.rankings))
 
+    @strawberry.type
+    class AdminMutation:
+        @strawberry.mutation(permission_classes=[admin_limit])
+        async def start_judging(
+            self,
+            info: strawberry.Info[GraphQLContext],
+            entities_csv: UploadFile | None = None,
+        ) -> JudgingSession:
+            from app.api.schema import rebind_schema
 
-async def stop_judging(info: strawberry.Info[GraphQLContext]) -> bool:
-    session = info.context.session
-    await run_judging(session.stop)
-    return session.get_enabled()
+            session = info.context.session
+            changed = await run_judging(lambda: session.start(entities_csv))
+            if changed:
+                rebind_schema(session.worker.get_headers())
+            return JudgingSession(is_started=session.worker.get_enabled())
 
+        @strawberry.mutation(permission_classes=[admin_limit])
+        async def stop_judging(
+            self, info: strawberry.Info[GraphQLContext]
+        ) -> JudgingSession:
+            worker = info.context.session.worker
+            await run_judging(worker.stop)
+            return JudgingSession(is_started=worker.get_enabled())
 
-async def resume_judging(info: strawberry.Info[GraphQLContext]) -> bool:
-    session = info.context.session
-    await run_judging(session.resume)
-    return session.get_enabled()
+        @strawberry.mutation(permission_classes=[admin_limit])
+        async def resume_judging(
+            self, info: strawberry.Info[GraphQLContext]
+        ) -> JudgingSession:
+            worker = info.context.session.worker
+            await run_judging(worker.resume)
+            return JudgingSession(is_started=worker.get_enabled())
 
-
-async def iter_rankings(
-    info: strawberry.Info[GraphQLContext],
-) -> AsyncGenerator[list[EntityWithId] | None]:
-    session = info.context.session
-    user_id = info.context.principal.user_id
-    if not subscriptions.try_acquire(user_id):
-        raise graphql_code("SUBSCRIPTION_LIMIT")
-    try:
-        subscriber = session.worker.subscribe_rankings()
-        try:
-            while True:
-                yield await subscriber.get()
-        finally:
-            session.worker.unsubscribe_rankings(subscriber)
-    finally:
-        subscriptions.release(user_id)
+    return AdminQuery, AdminMutation

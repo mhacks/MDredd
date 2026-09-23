@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -22,8 +21,7 @@ class State(TypedDict):
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
     session = Session()
-    session.worker.bind_loop(asyncio.get_running_loop())
-    rebind_schema(session.headers())
+    rebind_schema(session.worker.get_headers())
     try:
         yield {"session": session}
     finally:
