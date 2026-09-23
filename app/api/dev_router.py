@@ -1,13 +1,14 @@
 import logging
 import os
 
-from fastapi import APIRouter
+import strawberry
 
 logger = logging.getLogger(__name__)
-dev_router = APIRouter(prefix="/dev", tags=["dev"])
 
 
-@dev_router.post("/crash")
-def crash():
-    logger.warning("Dev crash route invoked")
-    os._exit(1)
+@strawberry.type
+class DevMutation:
+    @strawberry.mutation
+    def crash(self) -> bool:
+        logger.warning("Dev crash mutation invoked")
+        os._exit(1)

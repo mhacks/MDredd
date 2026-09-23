@@ -1,73 +1,76 @@
-from logging import getLogger
+import logging
+from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Request, UploadFile
+import strawberry
+from fastapi import UploadFile
 
-from app.entity import Entity
-from app.exceptions import (
-    JudgingAlreadyStartedException,
-    JudgingNeverStartedException,
-    JudgingNotStartedException,
-)
-from app.models import (
-    GenericResponseModel,
-    RankingsResponseModel,
-)
-from app.session import get_session
+from app.api.types import GraphQLContext, JudgingSession, Row, run_judging, to_row
 
-logger = getLogger(__name__)
-admin_router = APIRouter(prefix="/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 
-@admin_router.post("/start", response_model=GenericResponseModel)
-def start_judging(request: Request, entities_csv: UploadFile | None = None):
-    logger.info("Got request to start judging.")
-    session = get_session(request)
-    try:
-        session.start(entities_csv)
-        return {"status_code": 200, "message": "Successfully started!"}
-    except JudgingAlreadyStartedException:
-        return {"status_code": 200, "message": "Judging has already started!"}
+@strawberry.type
+class AdminQuery:
+    @strawberry.field
+    def session(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
+        return JudgingSession(is_started=info.context.session.get_enabled())
+
+    @strawberry.field
+    def columns(self, info: strawberry.Info[GraphQLContext]) -> list[str]:
+        return info.context.session.columns()
+
+    @strawberry.field
+    async def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Row:
+        session = info.context.session
+        entity = await run_judging(lambda: session.get_row(id))
+        return to_row(entity)
+
+    @strawberry.field
+    async def rankings(self, info: strawberry.Info[GraphQLContext]) -> list[Row]:
+        session = info.context.session
+        rankings = await run_judging(session.get_rankings)
+        return [to_row(entity) for entity in rankings]
 
 
-@admin_router.post("/stop", response_model=GenericResponseModel)
-def stop_judging(request: Request):
-    logger.info("Got request to stop judging.")
-    session = get_session(request)
-    try:
-        session.stop()
-        return {"message": "Successfully stopped!", "status_code": 200}
-    except JudgingNotStartedException:
-        return {"message": "Judging has not started!", "status_code": 200}
+@strawberry.type
+class AdminMutation:
+    @strawberry.mutation
+    async def start_judging(
+        self,
+        info: strawberry.Info[GraphQLContext],
+        entities_csv: UploadFile | None = None,
+    ) -> JudgingSession:
+        logger.info("Got request to start judging.")
+        session = info.context.session
+        await run_judging(lambda: session.start(entities_csv))
+        return JudgingSession(is_started=session.get_enabled())
+
+    @strawberry.mutation
+    async def stop_judging(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
+        logger.info("Got request to stop judging.")
+        session = info.context.session
+        await run_judging(session.stop)
+        return JudgingSession(is_started=session.get_enabled())
+
+    @strawberry.mutation
+    async def resume_judging(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
+        logger.info("Got request to resume judging.")
+        session = info.context.session
+        await run_judging(session.resume)
+        return JudgingSession(is_started=session.get_enabled())
 
 
-@admin_router.post("/resume", response_model=GenericResponseModel)
-def resume_judging(request: Request):
-    logger.info("Got request to resume judging.")
-    session = get_session(request)
-    try:
-        session.resume()
-        return {"message": "Successfully resumed!", "status_code": 200}
-    except JudgingAlreadyStartedException:
-        return {"message": "Judging has already started", "status_code": 200}
-    except JudgingNeverStartedException:
-        return {"message": "Judging never started", "status_code": 200}
-
-
-@admin_router.get("/rankings", response_model=RankingsResponseModel)
-def get_rankings(request: Request):
-    session = get_session(request)
-    try:
-        rankings = session.get_rankings()
-        return {
-            "message": "Successfully got rankings",
-            "status_code": 200,
-            "is_started": True,
-            "rankings": rankings,
-        }
-    except JudgingNotStartedException:
-        return {
-            "message": "Judging has never been started!",
-            "status_code": 409,
-            "is_started": False,
-            "rankings": list[Entity](),
-        }
+@strawberry.type
+class AdminSubscription:
+    @strawberry.subscription
+    async def rankings_updated(
+        self, info: strawberry.Info[GraphQLContext]
+    ) -> AsyncGenerator[list[Row]]:
+        session = info.context.session
+        subscriber = session.worker.subscribe_rankings()
+        try:
+            while True:
+                rankings = await subscriber.get()
+                yield [to_row(entity) for entity in rankings]
+        finally:
+            session.worker.unsubscribe_rankings(subscriber)

@@ -1,51 +1,52 @@
-from logging import getLogger
-from typing import Annotated
+import logging
 
-from fastapi import APIRouter, Depends, Request
+import strawberry
 
-from app.exceptions import JudgingNotStartedException
-from app.models import (
-    ComparisonInputModel,
-    GenericResponseModel,
-    PairRequestModel,
-    PairResponseModel,
-)
-from app.session import get_session
+from app.api.types import GraphQLContext, Row, run_judging, to_row
+from app.exceptions import IncorrectPairFormatException
+from app.models import ComparisonInputModel, PairRequestModel
 
-logger = getLogger(__name__)
-judge_router = APIRouter(prefix="/judge", tags=["judge"])
+logger = logging.getLogger(__name__)
 
 
-@judge_router.get("/pair", response_model=PairResponseModel)
-def get_pair(request: Request, pair_request: Annotated[PairRequestModel, Depends()]):
-    session = get_session(request)
-
-    logger.info(
-        "Got request for pair by %s (force=%s).",
-        pair_request.uuid,
-        pair_request.force,
-    )
-    try:
-        pair = session.get_pair(pair_request)
-        return {
-            "is_started": session.get_enabled(),
-            "pair": pair,
-            "message": "Successfully got pair!",
-            "status_code": 200,
-        }
-    except JudgingNotStartedException:
-        return {
-            "is_started": session.get_enabled(),
-            "message": "Judging has not started!",
-            "status_code": 409,
-        }
+@strawberry.type
+class JudgeQuery:
+    @strawberry.field
+    async def pair(
+        self,
+        info: strawberry.Info[GraphQLContext],
+        judge_id: str,
+        force: bool = False,
+    ) -> list[Row]:
+        logger.info("Got request for pair by %s (force=%s).", judge_id, force)
+        session = info.context.session
+        request = PairRequestModel(uuid=judge_id, force=force)
+        left, right = await run_judging(lambda: session.get_pair(request))
+        return [to_row(left), to_row(right)]
 
 
-@judge_router.post("/submit", response_model=GenericResponseModel)
-def submit_comparison(request: Request, comparison_request: ComparisonInputModel):
-    session = get_session(request)
-    try:
-        session.submit_pair(comparison_request)
-        return {"message": "Successfully submitted pair!", "status_code": 200}
-    except JudgingNotStartedException:
-        return {"message": "Judging has not started!", "status_code": 409}
+@strawberry.type
+class JudgeMutation:
+    @strawberry.mutation
+    async def submit_comparison(
+        self,
+        info: strawberry.Info[GraphQLContext],
+        judge_id: str,
+        entity_ids: list[int],
+        winner_id: int,
+    ) -> bool:
+        session = info.context.session
+
+        def submit() -> None:
+            if len(entity_ids) != 2:
+                raise IncorrectPairFormatException()
+            session.submit_pair(
+                ComparisonInputModel(
+                    uuid=judge_id,
+                    entity_ids=(entity_ids[0], entity_ids[1]),
+                    winner_id=winner_id,
+                )
+            )
+
+        await run_judging(submit)
+        return True

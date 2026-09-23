@@ -1,23 +1,54 @@
-class JudgingNotStartedException(RuntimeError):
+from typing import ClassVar
+
+
+class JudgingFailure(RuntimeError):
+    code: ClassVar[str] = "JUDGING_FAILURE"
+
+
+class JudgingNotStartedException(JudgingFailure):
+    code: ClassVar[str] = "JUDGING_NOT_STARTED"
+
     def __init__(self, message: str = "Judging Has Not Started") -> None:
         super().__init__(message)
 
 
-class JudgingAlreadyStartedException(RuntimeError):
+class JudgingAlreadyStartedException(JudgingFailure):
+    code: ClassVar[str] = "JUDGING_ALREADY_STARTED"
+
     def __init__(self, message: str = "Judging Has Already Started") -> None:
         super().__init__(message)
 
 
-class JudgingNeverStartedException(RuntimeError):
+class JudgingNeverStartedException(JudgingFailure):
+    code: ClassVar[str] = "JUDGING_NEVER_STARTED"
+
     def __init__(self, message: str = "Judging Never Started") -> None:
         super().__init__(message)
 
 
-class JudgeDoesNotOwnPairException(RuntimeError):
+class JudgeDoesNotOwnPairException(JudgingFailure):
+    code: ClassVar[str] = "JUDGE_DOES_NOT_OWN_PAIR"
+
     def __init__(self, message: str = "This Judge does not own the pair!") -> None:
         super().__init__(message)
 
 
-class IncorrectPairFormatException(RuntimeError):
+class IncorrectPairFormatException(JudgingFailure):
+    code: ClassVar[str] = "INCORRECT_PAIR_FORMAT"
+
     def __init__(self, message: str = "This Judge did not submit a pair correctly!") -> None:
         super().__init__(message)
+
+
+class UnknownRowException(JudgingFailure):
+    code: ClassVar[str] = "UNKNOWN_ROW"
+
+    def __init__(self, message: str = "Unknown row") -> None:
+        super().__init__(message)
+
+
+class UnknownAttributeException(JudgingFailure):
+    code: ClassVar[str] = "UNKNOWN_ATTRIBUTE"
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__("Unknown attributes: " + ", ".join(names))

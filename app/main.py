@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -7,10 +8,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin_router, judge_router
-from app.api.dev_router import dev_router
+from app.api import graphql_router
 from app.session import Session
-from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +21,7 @@ class State(TypedDict):
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
     session = Session()
+    session.worker.bind_loop(asyncio.get_running_loop())
     try:
         yield {"session": session}
     finally:
@@ -30,10 +30,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
 
 def create_app() -> FastAPI:
     application = FastAPI(lifespan=lifespan)
-    application.include_router(admin_router)
-    application.include_router(judge_router)
-    if settings.ENABLE_CRASH_ROUTE:
-        application.include_router(dev_router)
+    application.include_router(graphql_router())
 
     application.add_middleware(
         CORSMiddleware,
