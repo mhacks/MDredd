@@ -58,7 +58,7 @@ class RequestGuard(SchemaExtension):
     def _authorize(self) -> None:
         context = self.execution_context.context
         if not isinstance(context, GraphQLContext):
-            raise RuntimeError("GraphQL context is missing a principal")
+            raise TypeError("GraphQL context is missing a principal")
         self.fields = _root_fields(
             self.execution_context.graphql_document,
             self.execution_context.operation_name,

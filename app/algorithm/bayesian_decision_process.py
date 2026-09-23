@@ -1,11 +1,16 @@
 import time
-from typing import ClassVar
 
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 from jax import jit
-from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 FIELD_DTYPES = {
     "alpha_t": jnp.float32,
@@ -20,11 +25,11 @@ class BayesianDecisionProcess(BaseModel):
     frequency: jnp.ndarray
     key: jnp.ndarray
 
-    class Config:
-        arbitrary_types_allowed: ClassVar[bool] = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @model_validator(mode="before")
-    def initialize_missing(cls, values: dict[str, object]):
+    @classmethod
+    def initialize_missing(cls, values: dict[str, object]) -> dict[str, object]:
         K = values.get("K", 0)
 
         defaults = {
@@ -49,7 +54,8 @@ class BayesianDecisionProcess(BaseModel):
         )
 
     @field_validator(*FIELD_DTYPES.keys(), mode="before")
-    def ensure_correct_dtype(cls, v: object, info: ValidationInfo):
+    @classmethod
+    def ensure_correct_dtype(cls, v: object, info: ValidationInfo) -> jnp.ndarray:
         if info.field_name is None:
             raise ValueError("Validator is missing a field name")
         dtype = FIELD_DTYPES[info.field_name]
