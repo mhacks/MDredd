@@ -61,7 +61,8 @@ def build_admin(
             from app.api.schema import rebind_schema
 
             session = info.context.session
-            changed = await run_judging(lambda: session.start(entities_csv))
+            csv_bytes = None if entities_csv is None else await entities_csv.read()
+            changed = await run_judging(lambda: session.start(csv_bytes))
             if changed:
                 rebind_schema(session.worker.get_headers())
             return JudgingSession(is_started=session.worker.get_enabled())

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import graphql_router, rebind_schema
 from app.logging import RequestIdMiddleware, configure_logging
 from app.session import Session
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestIdMiddleware)
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8000"],
+        allow_origins=settings.CORS_ORIGINS,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -48,4 +49,4 @@ app = create_app()
 
 if __name__ == "__main__":
     logger.info("Starting API")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

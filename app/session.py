@@ -1,5 +1,3 @@
-from fastapi import UploadFile
-
 from app.columns import graphql_columns
 from app.entity import Entity
 from app.exceptions import JudgingAlreadyStartedException
@@ -14,7 +12,7 @@ class Session:
     def close(self) -> None:
         self.worker.shutdown()
 
-    def start(self, entity_csv: UploadFile | None = None) -> bool:
+    def start(self, entity_csv: bytes | None = None) -> bool:
         if entity_csv is None:
             self.worker.resume()
             return False
