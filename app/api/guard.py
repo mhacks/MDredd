@@ -5,6 +5,7 @@ from typing import NoReturn
 
 from graphql import GraphQLError
 from graphql.language import (
+    DocumentNode,
     FieldNode,
     FragmentDefinitionNode,
     FragmentSpreadNode,
@@ -34,8 +35,9 @@ JUDGE_FIELDS = frozenset(
 
 
 class RequestGuard(SchemaExtension):
-    def __init__(self, *, execution_context: object | None = None) -> None:
+    def __init__(self) -> None:
         self.remaining: int | None = None
+        self.fields: list[str] = []
 
     def on_execute(self) -> Iterator[None]:
         started = time.perf_counter()
@@ -57,11 +59,14 @@ class RequestGuard(SchemaExtension):
         context = self.execution_context.context
         if not isinstance(context, GraphQLContext):
             self._reject("unauthenticated", "Unauthorized", "UNAUTHENTICATED")
-        fields = _root_fields(self.execution_context.graphql_document, self.execution_context.operation_name)
+        self.fields = _root_fields(
+            self.execution_context.graphql_document,
+            self.execution_context.operation_name,
+        )
         allowed = ADMIN_FIELDS if context.principal.role == "admin" else JUDGE_FIELDS
-        if any(not _field_allowed(field, allowed) for field in fields):
+        if any(not field.startswith("__") and field not in allowed for field in self.fields):
             self._reject("forbidden", "Forbidden", "FORBIDDEN", context)
-        operations = _limited_operations(fields)
+        operations = _limited_operations(self.fields)
         if not operations:
             return
         decision = limiter.try_consume_all(context.principal.user_id, operations)
@@ -96,10 +101,7 @@ class RequestGuard(SchemaExtension):
     def _log_access(self, started: float, status: str) -> None:
         context = self.execution_context.context
         extra: dict[str, object] = {
-            "operation": _operation_label(
-                self.execution_context.graphql_document,
-                self.execution_context.operation_name,
-            ),
+            "operation": ",".join(self.fields) or self.execution_context.operation_name or "",
             "status": status,
             "latency_ms": round((time.perf_counter() - started) * 1000, 3),
         }
@@ -109,10 +111,6 @@ class RequestGuard(SchemaExtension):
         if self.remaining is not None:
             extra["rate_limit_remaining"] = self.remaining
         logger.info("graphql request", extra=extra)
-
-
-def _field_allowed(field: str, allowed: frozenset[str]) -> bool:
-    return field.startswith("__") or field in allowed
 
 
 def _limited_operations(fields: list[str]) -> list[str]:
@@ -126,17 +124,10 @@ def _limited_operations(fields: list[str]) -> list[str]:
     return operations
 
 
-def _operation_label(document: object, operation_name: str | None) -> str:
-    fields = _root_fields(document, operation_name)
-    if fields:
-        return ",".join(fields)
-    return operation_name or ""
-
-
-def _root_fields(document: object, operation_name: str | None) -> list[str]:
-    definitions = getattr(document, "definitions", None)
-    if not definitions:
+def _root_fields(document: DocumentNode | None, operation_name: str | None) -> list[str]:
+    if document is None:
         return []
+    definitions = document.definitions
     fragments: dict[str, FragmentDefinitionNode] = {}
     operations: list[OperationDefinitionNode] = []
     for definition in definitions:

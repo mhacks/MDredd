@@ -9,9 +9,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from strawberry.fastapi import BaseContext
 
-from app.auth import AuthError, Principal, authenticate
+from app.auth import AuthError, Principal, authenticate, bearer
 from app.exceptions import JudgingFailure, UnknownAttributeException
-from app.logging import request_id
 from app.models import EntityWithId
 from app.session import Session
 
@@ -64,10 +63,8 @@ async def run_judging(func: Callable[[], T]) -> T:
 
 
 async def get_context(connection: HTTPConnection) -> GraphQLContext:
-    if request_id.get() is None:
-        request_id.set(connection.headers.get("x-request-id"))
     try:
-        principal = authenticate(connection.headers.get("authorization"))
+        principal = authenticate(await bearer(connection))
     except AuthError as exc:
         logger.warning("Rejected request", extra={"reason": exc.reason, "status": "UNAUTHENTICATED"})
         raise HTTPException(

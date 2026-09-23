@@ -1,12 +1,14 @@
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, MutableMapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from typing import Any
+
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
+
+_HANDLER_NAME = "mdredd-json"
 
 _FIELDS = (
     "operation",
@@ -43,14 +45,11 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload)
 
 
-class _JsonHandler(logging.StreamHandler[Any]):
-    pass
-
-
 def configure_logging() -> None:
     root = logging.getLogger()
-    if not any(isinstance(handler, _JsonHandler) for handler in root.handlers):
-        handler = _JsonHandler()
+    if not any(handler.name == _HANDLER_NAME for handler in root.handlers):
+        handler = logging.StreamHandler()
+        handler.set_name(_HANDLER_NAME)
         handler.setFormatter(JsonFormatter())
         root.addHandler(handler)
     root.setLevel(logging.INFO)
@@ -61,23 +60,22 @@ def configure_logging() -> None:
 
 
 class RequestIdMiddleware:
-    def __init__(self, app: Callable[[MutableMapping[str, Any], Any, Any], Awaitable[None]]) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        header_name = b"x-request-id"
         found: str | None = None
         for key, value in scope.get("headers", []):
-            if key.lower() == header_name:
+            if key.lower() == b"x-request-id":
                 found = value.decode("latin-1")
                 break
         rid = found or uuid.uuid4().hex
         token = request_id.set(rid)
 
-        async def send_with_id(message: MutableMapping[str, Any]) -> None:
+        async def send_with_id(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
                 headers.append((b"x-request-id", rid.encode("latin-1")))

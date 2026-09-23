@@ -48,17 +48,12 @@ class TokenBucket:
                     retry_after_ms=self._retry_after(user_id, blocked, states[blocked]),
                     remaining=math.floor(states[blocked]),
                 )
-            remaining: int | None = None
+            counts: list[int] = []
             for operation, tokens in states.items():
                 left = tokens - 1
                 self._buckets[(user_id, operation)] = (left, now)
-                left_count = math.floor(left)
-                remaining = left_count if remaining is None else min(remaining, left_count)
-            return LimitResult(
-                allowed=True,
-                retry_after_ms=0,
-                remaining=0 if remaining is None else remaining,
-            )
+                counts.append(math.floor(left))
+            return LimitResult(allowed=True, retry_after_ms=0, remaining=min(counts))
 
     def _refill(self, user_id: str, operation: str, now: float) -> float:
         capacity, refill = _limits(user_id, operation)
@@ -76,27 +71,23 @@ class TokenBucket:
 
 class SubscriptionRegistry:
     def __init__(self) -> None:
-        self._counts: dict[str, int] = {}
+        self._users: set[str] = set()
         self._lock = threading.Lock()
 
     def reset(self) -> None:
         with self._lock:
-            self._counts.clear()
+            self._users.clear()
 
     def try_acquire(self, user_id: str) -> bool:
         with self._lock:
-            if self._counts.get(user_id, 0) >= 1:
+            if user_id in self._users:
                 return False
-            self._counts[user_id] = 1
+            self._users.add(user_id)
             return True
 
     def release(self, user_id: str) -> None:
         with self._lock:
-            count = self._counts.get(user_id, 0) - 1
-            if count <= 0:
-                self._counts.pop(user_id, None)
-            else:
-                self._counts[user_id] = count
+            self._users.discard(user_id)
 
 
 def _limits(user_id: str, operation: str) -> tuple[int, float]:

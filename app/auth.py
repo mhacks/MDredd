@@ -3,6 +3,10 @@ import hmac
 from dataclasses import dataclass
 from typing import Literal
 
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security.utils import get_authorization_scheme_param
+from starlette.requests import HTTPConnection
+
 from app.settings import ApiKey, settings
 
 
@@ -18,18 +22,30 @@ class AuthError(Exception):
         self.reason = reason
 
 
-def hash_api_key(key: str) -> str:
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+class ConnectionHTTPBearer(HTTPBearer):
+    """HTTPBearer for both HTTP and WebSocket connections.
+
+    FastAPI's ``HTTPBearer`` is typed for ``Request``. A WebSocket upgrade is
+    an ``HTTPConnection`` with the same ``Authorization`` header.
+    """
+
+    async def __call__(self, request: HTTPConnection) -> HTTPAuthorizationCredentials | None:
+        authorization = request.headers.get("Authorization")
+        scheme, credentials = get_authorization_scheme_param(authorization)
+        if not (authorization and scheme and credentials):
+            return None
+        if scheme.lower() != "bearer":
+            return None
+        return HTTPAuthorizationCredentials(scheme=scheme, credentials=credentials)
 
 
-def authenticate(authorization: str | None) -> Principal:
-    if authorization is None:
+bearer = ConnectionHTTPBearer(auto_error=False)
+
+
+def authenticate(credentials: HTTPAuthorizationCredentials | None) -> Principal:
+    if credentials is None:
         raise AuthError("missing_key")
-    scheme, _, token = authorization.partition(" ")
-    token = token.strip()
-    if scheme.lower() != "bearer" or token == "":
-        raise AuthError("missing_key")
-    digest = hash_api_key(token)
+    digest = hashlib.sha256(credentials.credentials.encode("utf-8")).hexdigest()
     for record in settings.API_KEYS:
         if len(record.key_hash) == len(digest) and hmac.compare_digest(
             record.key_hash.lower(), digest

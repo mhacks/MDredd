@@ -10,7 +10,7 @@ from .admin_router import AdminMutation, AdminQuery, AdminSubscription
 from .dev_router import DevMutation
 from .guard import RequestGuard
 from .judge_router import JudgeMutation, JudgeQuery
-from .types import get_context
+from .types import GraphQLContext, get_context
 
 
 def build_schema() -> strawberry.Schema:
@@ -26,7 +26,7 @@ def build_schema() -> strawberry.Schema:
     )
 
 
-def graphql_router() -> GraphQLRouter[object, None]:
+def graphql_router() -> GraphQLRouter[GraphQLContext, None]:
     return GraphQLRouter(
         build_schema(),
         path="/",
