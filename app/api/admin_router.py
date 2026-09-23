@@ -3,7 +3,14 @@ from collections.abc import AsyncGenerator
 import strawberry
 from fastapi import UploadFile
 
-from app.api.types import GraphQLContext, JudgingSession, Row, graphql_code, run_judging, to_row
+from app.api.types import (
+    GraphQLContext,
+    JudgingSession,
+    Row,
+    graphql_code,
+    run_judging,
+    to_row,
+)
 from app.ratelimit import limiter, subscriptions
 
 
@@ -14,8 +21,9 @@ class AdminQuery:
         return JudgingSession(is_started=info.context.session.get_enabled())
 
     @strawberry.field
-    def columns(self, info: strawberry.Info[GraphQLContext]) -> list[str]:
-        return info.context.session.columns()
+    async def columns(self, info: strawberry.Info[GraphQLContext]) -> list[str]:
+        session = info.context.session
+        return await run_judging(session.columns)
 
     @strawberry.field
     async def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Row:
@@ -39,7 +47,8 @@ class AdminMutation:
         entities_csv: UploadFile | None = None,
     ) -> JudgingSession:
         session = info.context.session
-        await run_judging(lambda: session.start(entities_csv))
+        csv_bytes = None if entities_csv is None else await entities_csv.read()
+        await run_judging(lambda: session.start(csv_bytes))
         return JudgingSession(is_started=session.get_enabled())
 
     @strawberry.mutation

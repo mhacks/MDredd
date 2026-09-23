@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable
-from typing import TypeVar
 
 import strawberry
 from fastapi import HTTPException
@@ -13,8 +12,6 @@ from app.auth import AuthError, Principal, authenticate, bearer
 from app.exceptions import JudgingFailure, UnknownAttributeException
 from app.models import EntityWithId
 from app.session import Session
-
-T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +55,7 @@ def graphql_code(code: str, **extra: object) -> GraphQLError:
     return GraphQLError(code, extensions={"code": code, **extra})
 
 
-async def run_judging(func: Callable[[], T]) -> T:
+async def run_judging[T](func: Callable[[], T]) -> T:
     try:
         return await run_in_threadpool(func)
     except UnknownAttributeException as exc:

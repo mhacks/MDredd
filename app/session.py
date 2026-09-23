@@ -1,5 +1,4 @@
 
-from fastapi import UploadFile
 from peewee import DoesNotExist
 
 from app.adapters import (
@@ -41,7 +40,7 @@ class Session:
     def get_enabled(self) -> bool:
         return self.enabled
 
-    def start(self, entity_csv: UploadFile | None = None):
+    def start(self, entity_csv: bytes | None = None) -> None:
         if self.enabled:
             raise JudgingAlreadyStartedException()
 

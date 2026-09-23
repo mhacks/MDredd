@@ -1,13 +1,20 @@
 import json
 import time
-
-from fastapi import UploadFile
+from typing import Any
 
 from app.algorithm import BayesianDecisionProcess
 from app.db import AssignmentTable, EntityTable, SnapshotTable, WriteAheadTable, db
 from app.entity import Entity
 from app.models import ComparisonInputModel, PairRequestModel
 from app.settings import settings
+
+
+def _stored_object(value: object) -> dict[str, Any]:
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict):
+        return value
+    raise TypeError("Stored JSON value is not an object")
 
 
 class EntityAdapter:
@@ -19,22 +26,22 @@ class EntityAdapter:
 
     def __getitem__(self, id: int) -> Entity:
         record = EntityTable.get(EntityTable.id == (id + 1))  # SQLite IDs start at 1
-        return Entity(**json.loads(record.data))
+        return Entity(**_stored_object(record.data))
 
     def to_list(self) -> list[Entity]:
         records = EntityTable.select().order_by(EntityTable.id)
-        entities = [Entity(**json.loads(record.data)) for record in records]
+        entities = [Entity(**_stored_object(record.data)) for record in records]
         return entities
 
-    def clear(self):
+    def clear(self) -> None:
         db.drop_tables([EntityTable], safe=True)
         db.create_tables([EntityTable], safe=True)
 
-    def load(self, raw_csv: UploadFile | None = None):
+    def load(self, raw_csv: bytes | None = None) -> None:
         if raw_csv is not None:
             self.clear()
             entities = Entity.list_from_csv(raw_csv)
-            rows = [{"data": e.model_dump_json()} for e in entities]
+            rows = [{"data": e.model_dump()} for e in entities]
 
             with db.atomic():
                 EntityTable.insert_many(rows).execute()
@@ -71,10 +78,7 @@ class SnapshotAdapter:
 
         if record is not None:
             timestamp = record.timestamp
-            payload = record.bdp
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-            algo = BayesianDecisionProcess(**payload)
+            algo = BayesianDecisionProcess(**_stored_object(record.bdp))
             return (timestamp, algo)
         else:
             return None
@@ -119,7 +123,7 @@ class WriteAheadAdapter:
         db.drop_tables([WriteAheadTable], safe=True)
         db.create_tables([WriteAheadTable], safe=True)
 
-    def log(self, log_data: ComparisonInputModel | PairRequestModel):
+    def log(self, log_data: ComparisonInputModel | PairRequestModel) -> None:
         match log_data:
             case ComparisonInputModel():
                 event_type = "submit_pair"
@@ -127,7 +131,7 @@ class WriteAheadAdapter:
                 event_type = "get_pair"
 
         _ = WriteAheadTable.create(
-            event=event_type, timestamp=time.time(), params=log_data.model_dump_json()
+            event=event_type, timestamp=time.time(), params=log_data.model_dump()
         )
 
     def replay(self, snapshot_time: int, bdp_instance: BayesianDecisionProcess) -> dict[str, int]:
@@ -138,7 +142,7 @@ class WriteAheadAdapter:
         )
         counts = {"get_pair": 0, "submit_pair": 0}
         for record in records:
-            params = json.loads(record.params)
+            params = _stored_object(record.params)
 
             match record.event:
                 case "get_pair":
