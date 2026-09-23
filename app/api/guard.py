@@ -15,7 +15,7 @@ from graphql.language import (
 )
 from strawberry.extensions import SchemaExtension
 
-from app.api.types import GraphQLContext
+from app.api.types import GraphQLContext, graphql_code
 from app.ratelimit import limiter
 
 logger = logging.getLogger(__name__)
@@ -88,10 +88,9 @@ class RequestGuard(SchemaExtension):
                 "role": context.principal.role,
             },
         )
-        extensions: dict[str, object] = {"code": code}
-        if retry_after_ms is not None:
-            extensions["retryAfterMs"] = retry_after_ms
-        raise GraphQLError(code, extensions=extensions)
+        if retry_after_ms is None:
+            raise graphql_code(code)
+        raise graphql_code(code, retryAfterMs=retry_after_ms)
 
     def _log_access(self, started: float, status: str) -> None:
         context = self.execution_context.context

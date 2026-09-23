@@ -2,9 +2,8 @@ from collections.abc import AsyncGenerator
 
 import strawberry
 from fastapi import UploadFile
-from graphql import GraphQLError
 
-from app.api.types import GraphQLContext, JudgingSession, Row, run_judging, to_row
+from app.api.types import GraphQLContext, JudgingSession, Row, graphql_code, run_judging, to_row
 from app.ratelimit import limiter, subscriptions
 
 
@@ -67,14 +66,8 @@ class AdminSubscription:
         if not subscriptions.try_acquire(user_id):
             decision = limiter.try_consume(user_id, "pair")
             if not decision.allowed:
-                raise GraphQLError(
-                    "RATE_LIMITED",
-                    extensions={"code": "RATE_LIMITED", "retryAfterMs": decision.retry_after_ms},
-                )
-            raise GraphQLError(
-                "SUBSCRIPTION_LIMIT",
-                extensions={"code": "SUBSCRIPTION_LIMIT"},
-            )
+                raise graphql_code("RATE_LIMITED", retryAfterMs=decision.retry_after_ms)
+            raise graphql_code("SUBSCRIPTION_LIMIT")
         try:
             subscriber = session.worker.subscribe_rankings()
             try:
