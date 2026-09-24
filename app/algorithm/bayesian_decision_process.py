@@ -1,4 +1,5 @@
 import time
+from typing import Self
 
 import jax.numpy as jnp
 import jax.random as jr
@@ -103,6 +104,16 @@ class BayesianDecisionProcess(BaseModel):
         dtype = FIELD_DTYPES[info.field_name]
         return jnp.array(v, dtype=dtype)
 
+    @model_validator(mode="after")
+    def ensure_matching_dimensions(self) -> Self:
+        expected_shape = (self.K,)
+        if (
+            self.alpha_t.shape != expected_shape
+            or self.frequency.shape != expected_shape
+        ):
+            raise ValueError("alpha_t and frequency must each contain K values")
+        return self
+
     def get_alphas(self) -> np.ndarray:
         return np.array(self.alpha_t)
 
@@ -168,11 +179,3 @@ class BayesianDecisionProcess(BaseModel):
         alpha_prime = c * alpha_0_prime
 
         return alpha_prime
-
-    @staticmethod
-    @jit
-    def softmax(logits: jnp.ndarray, temp: float = 1.0) -> jnp.ndarray:
-        scaled = logits / temp
-        exped = jnp.exp(scaled - jnp.max(scaled, axis=-1, keepdims=True))
-        normed = exped / jnp.sum(exped, axis=-1, keepdims=True)
-        return normed
