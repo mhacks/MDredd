@@ -267,8 +267,6 @@ class JudgeWorker:
         if not self.enabled:
             raise JudgingNotStartedException()
         entities = self._entities
-        alphas = np.asarray(self._require_bdp().get_alphas(), dtype=np.float64)
-        ranked_ids = sorted(
-            range(len(entities)), key=lambda index: alphas[index], reverse=True
-        )
+        alphas = self._require_bdp().get_alphas()[: len(entities)]
+        ranked_ids = np.argsort(-alphas, kind="stable").tolist()
         return [self._with_id(entities[index], index) for index in ranked_ids]
