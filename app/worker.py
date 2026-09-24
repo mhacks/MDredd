@@ -170,9 +170,10 @@ class JudgeWorker:
             return self._pair(*assigned)
 
         def draw() -> tuple[int, int]:
-            i, j = self._require_bdp().get_next_pair()
+            bdp = self._require_bdp()
+            i, j = bdp.get_next_pair()
             self._assignments[pair_request.uuid] = (i, j)
-            save_assignment(self._require_bdp(), pair_request.uuid, (i, j))
+            save_assignment(bdp, pair_request.uuid, (i, j))
             return i, j
 
         return self._pair(*self._persist(draw))
@@ -220,7 +221,16 @@ class JudgeWorker:
         try:
             return write()
         except Exception:
-            self._reload()
+            try:
+                self._reload()
+            except Exception:
+                # Keeping unsaved state would let it drift from the database.
+                logger.exception("Judge worker failed to reload after a write")
+                self._install(
+                    JudgeRecord(
+                        enabled=False, headers=[], entities=[], assignments={}, bdp=None
+                    )
+                )
             raise
 
     def _install(self, record: JudgeRecord) -> None:
