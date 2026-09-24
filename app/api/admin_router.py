@@ -25,7 +25,9 @@ def build_admin(
         @strawberry.field
         async def session(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
             worker = info.context.session.worker
-            return JudgingSession(is_started=await run_judging(worker.get_enabled))
+            return JudgingSession(
+                is_started=await run_judging(worker.get_enabled_async)
+            )
 
         @strawberry.field
         def columns(self) -> list[ColumnRecord]:
@@ -38,14 +40,16 @@ def build_admin(
         async def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Any:
             worker = info.context.session.worker
             return materialize(
-                columns, row_type, await run_judging(lambda: worker.get_row(id))
+                columns,
+                row_type,
+                await run_judging(lambda: worker.get_row_async(id)),
             )
 
         @strawberry.field(graphql_type=list[row_type])
         async def rankings(self, info: strawberry.Info[GraphQLContext]) -> Any:
             worker = info.context.session.worker
             return materialize_all(
-                columns, row_type, await run_judging(worker.rankings)
+                columns, row_type, await run_judging(worker.rankings_async)
             )
 
     @strawberry.type
@@ -58,12 +62,12 @@ def build_admin(
         ) -> JudgingSession:
             session = info.context.session
             if entities_csv is None:
-                await run_judging(session.worker.resume)
+                await run_judging(session.worker.resume_async)
             else:
                 csv_bytes = await entities_csv.read()
-                rebind(await run_judging(lambda: session.start(csv_bytes)))
+                rebind(await run_judging(lambda: session.start_async(csv_bytes)))
             return JudgingSession(
-                is_started=await run_judging(session.worker.get_enabled)
+                is_started=await run_judging(session.worker.get_enabled_async)
             )
 
         @strawberry.mutation(permission_classes=[admin_limit])
@@ -71,15 +75,19 @@ def build_admin(
             self, info: strawberry.Info[GraphQLContext]
         ) -> JudgingSession:
             worker = info.context.session.worker
-            await run_judging(worker.stop)
-            return JudgingSession(is_started=await run_judging(worker.get_enabled))
+            await run_judging(worker.stop_async)
+            return JudgingSession(
+                is_started=await run_judging(worker.get_enabled_async)
+            )
 
         @strawberry.mutation(permission_classes=[admin_limit])
         async def resume_judging(
             self, info: strawberry.Info[GraphQLContext]
         ) -> JudgingSession:
             worker = info.context.session.worker
-            await run_judging(worker.resume)
-            return JudgingSession(is_started=await run_judging(worker.get_enabled))
+            await run_judging(worker.resume_async)
+            return JudgingSession(
+                is_started=await run_judging(worker.get_enabled_async)
+            )
 
     return AdminQuery, AdminMutation

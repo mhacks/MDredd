@@ -25,7 +25,9 @@ def build_judge(
         ) -> Any:
             worker = info.context.session.worker
             request = PairRequestModel(uuid=JUDGE_ID, force=force)
-            left, right = await run_judging(lambda: worker.request_pair(request))
+            left, right = await run_judging(
+                lambda: worker.request_pair_async(request)
+            )
             return materialize_all(columns, row_type, [left, right])
 
     @strawberry.type
@@ -39,10 +41,10 @@ def build_judge(
         ) -> bool:
             worker = info.context.session.worker
 
-            def submit() -> None:
+            async def submit() -> None:
                 if len(entity_ids) != 2:
                     raise IncorrectPairFormatException()
-                worker.submit(
+                await worker.submit_async(
                     ComparisonInputModel(
                         uuid=JUDGE_ID,
                         entity_ids=(entity_ids[0], entity_ids[1]),

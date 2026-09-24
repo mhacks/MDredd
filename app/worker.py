@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import queue
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from typing import cast
 
 import numpy as np
@@ -32,7 +34,7 @@ from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
 logger = logging.getLogger(__name__)
 
 Job = Callable[[], object] | None
-Reply = queue.Queue[object]
+Reply = Future[object]
 
 
 class JudgeWorker:
@@ -65,47 +67,79 @@ class JudgeWorker:
     def shutdown(self) -> None:
         if not self._thread.is_alive():
             return
-        reply: Reply = queue.Queue(maxsize=1)
-        self.channel.put((None, reply))
-        _ = reply.get()
+        self._enqueue(None).result()
         self._thread.join(timeout=5)
 
     def get_enabled(self) -> bool:
         return self._call(lambda: self.enabled)
 
+    async def get_enabled_async(self) -> bool:
+        return await self._call_async(lambda: self.enabled)
+
     def get_headers(self) -> list[str]:
         return self._call(lambda: list(self.headers))
+
+    async def get_headers_async(self) -> list[str]:
+        return await self._call_async(lambda: list(self.headers))
 
     def get_row(self, row_id: int) -> EntityWithId:
         return self._call(lambda: self._row(row_id))
 
+    async def get_row_async(self, row_id: int) -> EntityWithId:
+        return await self._call_async(lambda: self._row(row_id))
+
     def replace_entities(self, entities: list[Entity], headers: list[str]) -> None:
         self._call(lambda: self._replace_entities(entities, headers))
+
+    async def replace_entities_async(
+        self, entities: list[Entity], headers: list[str]
+    ) -> None:
+        await self._call_async(lambda: self._replace_entities(entities, headers))
 
     def resume(self) -> None:
         self._call(lambda: self._set_enabled(True))
 
+    async def resume_async(self) -> None:
+        await self._call_async(lambda: self._set_enabled(True))
+
     def stop(self) -> None:
         self._call(lambda: self._set_enabled(False))
+
+    async def stop_async(self) -> None:
+        await self._call_async(lambda: self._set_enabled(False))
 
     def request_pair(
         self, pair_request: PairRequestModel
     ) -> tuple[EntityWithId, EntityWithId]:
         return self._call(lambda: self._get_pair(pair_request))
 
+    async def request_pair_async(
+        self, pair_request: PairRequestModel
+    ) -> tuple[EntityWithId, EntityWithId]:
+        return await self._call_async(lambda: self._get_pair(pair_request))
+
     def submit(self, comparison: ComparisonInputModel) -> None:
         self._call(lambda: self._submit(comparison))
+
+    async def submit_async(self, comparison: ComparisonInputModel) -> None:
+        await self._call_async(lambda: self._submit(comparison))
 
     def rankings(self) -> list[EntityWithId]:
         return self._call(self._rankings_snapshot)
 
+    async def rankings_async(self) -> list[EntityWithId]:
+        return await self._call_async(self._rankings_snapshot)
+
     def _call[T](self, fn: Callable[[], T]) -> T:
-        reply: Reply = queue.Queue(maxsize=1)
-        self.channel.put((fn, reply))
-        result = reply.get()
-        if isinstance(result, Exception):
-            raise result
-        return cast(T, result)
+        return cast(T, self._enqueue(fn).result())
+
+    async def _call_async[T](self, fn: Callable[[], T]) -> T:
+        return cast(T, await asyncio.wrap_future(self._enqueue(fn)))
+
+    def _enqueue(self, job: Job) -> Reply:
+        reply: Reply = Future()
+        self.channel.put((job, reply))
+        return reply
 
     def _run(self) -> None:
         try:
@@ -122,15 +156,19 @@ class JudgeWorker:
 
             while True:
                 job, reply = self.channel.get()
+                if not reply.set_running_or_notify_cancel():
+                    continue
                 if job is None:
-                    reply.put(None)
+                    reply.set_result(None)
                     return
                 try:
-                    reply.put(job())
+                    result = job()
                 except Exception as exc:
                     if not isinstance(exc, JudgingFailure):
                         logger.exception("Judge worker command failed")
-                    reply.put(exc)
+                    reply.set_exception(exc)
+                else:
+                    reply.set_result(result)
         finally:
             close_db()
 

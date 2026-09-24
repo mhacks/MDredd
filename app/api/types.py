@@ -1,10 +1,9 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import strawberry
 from fastapi import HTTPException, Request
 from graphql import GraphQLError
-from starlette.concurrency import run_in_threadpool
 from strawberry.fastapi import BaseContext
 
 from app.auth import AuthError, authenticate, bearer
@@ -30,9 +29,9 @@ def graphql_code(code: str, **extra: object) -> GraphQLError:
     return GraphQLError(code, extensions={"code": code, **extra})
 
 
-async def run_judging[T](func: Callable[[], T]) -> T:
+async def run_judging[T](operation: Callable[[], Awaitable[T]]) -> T:
     try:
-        return await run_in_threadpool(func)
+        return await operation()
     except InvalidColumnsException as exc:
         raise graphql_code(exc.code, names=exc.names) from exc
     except JudgingFailure as exc:
