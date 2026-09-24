@@ -32,7 +32,10 @@ def _logsumexp_excluding_each(logits: jnp.ndarray) -> jnp.ndarray:
 def _pair_sampling_logits(
     frequency: jnp.ndarray, temperature: float
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    entity_logits = -frequency.astype(jnp.float32) / temperature
+    # Shifting by the minimum keeps the distribution and keeps float32 logits
+    # near zero as frequencies grow.
+    shifted = frequency - jnp.min(frequency)
+    entity_logits = -shifted.astype(jnp.float32) / temperature
     # A pair's weight factorizes as exp(logit[i]) * exp(logit[j]). The first
     # draw includes the combined weight of every valid partner; the second is
     # then sampled conditionally with the first entity excluded.
@@ -118,7 +121,7 @@ class BayesianDecisionProcess(BaseModel):
     def get_next_pair(self, temp: float = 1.0) -> tuple[int, int]:
         if self.K < 2:
             raise ValueError("At least two entities are required to draw a pair")
-        if temp <= 0:
+        if not temp > 0:
             raise ValueError("Pair sampling temperature must be positive")
         self.frequency, self.key, next_i, next_j = _draw_next_pair(
             self.frequency, self.key, temp
@@ -165,11 +168,3 @@ class BayesianDecisionProcess(BaseModel):
         alpha_prime = c * alpha_0_prime
 
         return alpha_prime
-
-    @staticmethod
-    @jit
-    def softmax(logits: jnp.ndarray, temp: float = 1.0) -> jnp.ndarray:
-        scaled = logits / temp
-        exped = jnp.exp(scaled - jnp.max(scaled, axis=-1, keepdims=True))
-        normed = exped / jnp.sum(exped, axis=-1, keepdims=True)
-        return normed
