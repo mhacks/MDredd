@@ -13,15 +13,12 @@ def _prepare_entities(entity_csv: bytes) -> tuple[list[str], list[Entity], list[
 class Session:
     def __init__(self) -> None:
         self.worker = JudgeWorker()
-        self.worker.start()
 
-    def close(self) -> None:
-        self.worker.shutdown()
+    async def open(self) -> None:
+        await self.worker.start()
 
-    def start(self, entity_csv: bytes) -> list[Column]:
-        headers, entities, columns = _prepare_entities(entity_csv)
-        self.worker.replace_entities(entities, headers)
-        return columns
+    async def close(self) -> None:
+        await self.worker.shutdown()
 
     async def start_async(self, entity_csv: bytes) -> list[Column]:
         headers, entities, columns = await run_in_threadpool(

@@ -22,11 +22,12 @@ class State(TypedDict):
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
     session = Session()
+    await session.open()
     rebind_schema(await session.worker.get_headers_async())
     try:
         yield {"session": session}
     finally:
-        session.close()
+        await session.close()
 
 
 def create_app() -> FastAPI:

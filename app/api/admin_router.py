@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -65,10 +66,14 @@ def build_admin(
                 await run_judging(session.worker.resume_async)
             else:
                 csv_bytes = await entities_csv.read()
-                rebind(await run_judging(lambda: session.start_async(csv_bytes)))
-            return JudgingSession(
-                is_started=await run_judging(session.worker.get_enabled_async)
-            )
+
+                async def upload() -> None:
+                    rebind(await session.start_async(csv_bytes))
+
+                # Keep the schema in step with the worker even if this request
+                # is cancelled while the upload is being applied.
+                await run_judging(lambda: asyncio.shield(upload()))
+            return JudgingSession(is_started=True)
 
         @strawberry.mutation(permission_classes=[admin_limit])
         async def stop_judging(
@@ -76,9 +81,7 @@ def build_admin(
         ) -> JudgingSession:
             worker = info.context.session.worker
             await run_judging(worker.stop_async)
-            return JudgingSession(
-                is_started=await run_judging(worker.get_enabled_async)
-            )
+            return JudgingSession(is_started=False)
 
         @strawberry.mutation(permission_classes=[admin_limit])
         async def resume_judging(
@@ -86,8 +89,6 @@ def build_admin(
         ) -> JudgingSession:
             worker = info.context.session.worker
             await run_judging(worker.resume_async)
-            return JudgingSession(
-                is_started=await run_judging(worker.get_enabled_async)
-            )
+            return JudgingSession(is_started=True)
 
     return AdminQuery, AdminMutation
