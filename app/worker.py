@@ -50,7 +50,6 @@ class JudgeWorker:
         self.headers: list[str] = []
         self._entities: list[Entity] = []
         self._assignments: dict[str, tuple[int, int]] = {}
-        self._ranked_ids: list[int] | None = None
         self._ready = threading.Event()
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
@@ -201,7 +200,6 @@ class JudgeWorker:
             save_comparison(self._require_bdp(), judge)
 
         self._persist(apply)
-        self._ranked_ids = None
         logger.info(
             "Applied comparison",
             extra={
@@ -228,7 +226,6 @@ class JudgeWorker:
         self._entities = list(record.entities)
         self._assignments = dict(record.assignments)
         self.bdp = record.bdp
-        self._ranked_ids = None
 
     def _reload(self) -> None:
         self._install(load_state())
@@ -257,9 +254,6 @@ class JudgeWorker:
         if not self.enabled:
             raise JudgingNotStartedException()
         entities = self._entities
-        ranked_ids = self._ranked_ids
-        if ranked_ids is None:
-            alphas = self._require_bdp().get_alphas()
-            ranked_ids = np.argsort(-alphas, kind="stable").tolist()
-            self._ranked_ids = ranked_ids
+        alphas = self._require_bdp().get_alphas()[: len(entities)]
+        ranked_ids = np.argsort(-alphas, kind="stable").tolist()
         return [self._with_id(entities[index], index) for index in ranked_ids]
