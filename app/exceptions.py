@@ -28,10 +28,6 @@ class IncorrectPairFormatException(JudgingFailure):
     code: ClassVar[str] = "INCORRECT_PAIR_FORMAT"
 
 
-class TooFewEntitiesException(JudgingFailure):
-    code: ClassVar[str] = "TOO_FEW_ENTITIES"
-
-
 class UnknownRowException(JudgingFailure):
     code: ClassVar[str] = "UNKNOWN_ROW"
 

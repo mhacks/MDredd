@@ -168,3 +168,11 @@ class BayesianDecisionProcess(BaseModel):
         alpha_prime = c * alpha_0_prime
 
         return alpha_prime
+
+    @staticmethod
+    @jit
+    def softmax(logits: jnp.ndarray, temp: float = 1.0) -> jnp.ndarray:
+        scaled = logits / temp
+        exped = jnp.exp(scaled - jnp.max(scaled, axis=-1, keepdims=True))
+        normed = exped / jnp.sum(exped, axis=-1, keepdims=True)
+        return normed
