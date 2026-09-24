@@ -107,7 +107,7 @@ def load_state() -> JudgeRecord:
             assignments=assignments,
             bdp=None,
         )
-    model = _load_model(len(entities), judge)
+    model = _load_model(len(entities))
     return JudgeRecord(
         enabled=bool(judge.enabled) and model is not None,
         headers=list(judge.headers),
@@ -138,9 +138,10 @@ def replace_state(
                     for index, entity in enumerate(record.entities)
                 ]
             ).execute()
+            frequency = np.asarray(bdp.frequency)
             EntityState.insert_many(
                 [
-                    {"entity_id": index, "frequency": int(bdp.frequency[index])}
+                    {"entity_id": index, "frequency": int(frequency[index])}
                     for index in range(len(record.entities))
                 ]
             ).execute()
@@ -211,12 +212,10 @@ def save_enabled(enabled: bool) -> None:
         raise RuntimeError("Judge row is missing")
 
 
-def _load_model(entity_count: int, judge: Judge) -> BayesianDecisionProcess | None:
+def _load_model(entity_count: int) -> BayesianDecisionProcess | None:
     state = JudgeState.get_or_none(JudgeState.id == 1)
     if state is None:
-        if judge.bdp is None:
-            return None
-        return BayesianDecisionProcess.model_validate(judge.bdp)
+        return None
 
     frequency_rows = cast(
         list[tuple[int, int]],
