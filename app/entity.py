@@ -12,7 +12,12 @@ class Entity(BaseModel):
         frame = pd.read_csv(io.BytesIO(raw_csv), dtype=str, keep_default_na=False)
         columns = [str(column) for column in frame.columns]
         entities = [
-            Entity(attributes={column: str(row[column]) for column in columns})
-            for _, row in frame.iterrows()
+            Entity(
+                attributes={
+                    column: str(value)
+                    for column, value in zip(columns, row, strict=True)
+                }
+            )
+            for row in frame.itertuples(index=False, name=None)
         ]
         return columns, entities
