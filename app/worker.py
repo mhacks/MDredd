@@ -25,6 +25,7 @@ from app.exceptions import (
     JudgingFailure,
     JudgingNeverStartedException,
     JudgingNotStartedException,
+    TooFewEntitiesException,
     UnknownRowException,
 )
 from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
@@ -141,6 +142,8 @@ class JudgeWorker:
     def _replace_entities(self, entities: list[Entity], headers: list[str]) -> None:
         if self.enabled:
             raise JudgingAlreadyStartedException()
+        if len(entities) < 2:
+            raise TooFewEntitiesException()
         bdp = BayesianDecisionProcess.create(len(entities))
         self._install(replace_state(headers, entities, bdp))
 
