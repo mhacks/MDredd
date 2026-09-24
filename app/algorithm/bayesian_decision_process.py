@@ -3,7 +3,7 @@ import time
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
-from jax import jit
+from jax import jit, lax
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -17,6 +17,45 @@ FIELD_DTYPES = {
     "frequency": jnp.int32,
     "key": jnp.uint32,
 }
+
+
+def _logsumexp_excluding_each(logits: jnp.ndarray) -> jnp.ndarray:
+    """Return log(sum(exp(logits[j]))) for every exclusion j != i."""
+    prefix = lax.associative_scan(jnp.logaddexp, logits)
+    suffix = lax.associative_scan(jnp.logaddexp, logits, reverse=True)
+    negative_infinity = jnp.full((1,), -jnp.inf, dtype=logits.dtype)
+    before = jnp.concatenate((negative_infinity, prefix[:-1]))
+    after = jnp.concatenate((suffix[1:], negative_infinity))
+    return jnp.logaddexp(before, after)
+
+
+def _pair_sampling_logits(
+    frequency: jnp.ndarray, temperature: float
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    entity_logits = -frequency.astype(jnp.float32) / temperature
+    # A pair's weight factorizes as exp(logit[i]) * exp(logit[j]). The first
+    # draw includes the combined weight of every valid partner; the second is
+    # then sampled conditionally with the first entity excluded.
+    first_logits = entity_logits + _logsumexp_excluding_each(entity_logits)
+    return entity_logits, first_logits
+
+
+@jit
+def _draw_next_pair(
+    frequency: jnp.ndarray, key: jnp.ndarray, temperature: float
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Draw the same distribution as enumerating every unordered pair."""
+    entity_logits, first_logits = _pair_sampling_logits(frequency, temperature)
+    next_key, first_key, second_key = jr.split(key, 3)
+
+    first = jr.categorical(first_key, first_logits)
+    second_logits = entity_logits.at[first].set(-jnp.inf)
+    second = jr.categorical(second_key, second_logits)
+
+    left = jnp.minimum(first, second)
+    right = jnp.maximum(first, second)
+    frequency = frequency.at[left].add(1).at[right].add(1)
+    return frequency, next_key, left, right
 
 
 class BayesianDecisionProcess(BaseModel):
@@ -77,19 +116,14 @@ class BayesianDecisionProcess(BaseModel):
         self.alpha_t = BayesianDecisionProcess.MM(self.alpha_t, i, j, Y_ij)
 
     def get_next_pair(self, temp: float = 1.0) -> tuple[int, int]:
-        i_all, j_all = jnp.triu_indices(self.K, k=1)
-        pair_frequency = self.frequency[i_all] + self.frequency[j_all]
-        distribution = BayesianDecisionProcess.softmax(-pair_frequency, temp)
-        self.key, subkey = jr.split(self.key)
-
-        NUM_PAIRS = self.K * (self.K - 1) // 2
-        next_idx = jr.choice(subkey, NUM_PAIRS, p=distribution)
-        next_i = int(i_all[next_idx].astype(int))
-        next_j = int(j_all[next_idx].astype(int))
-        self.frequency = self.frequency.at[next_i].add(1)
-        self.frequency = self.frequency.at[next_j].add(1)
-
-        return next_i, next_j
+        if self.K < 2:
+            raise ValueError("At least two entities are required to draw a pair")
+        if temp <= 0:
+            raise ValueError("Pair sampling temperature must be positive")
+        self.frequency, self.key, next_i, next_j = _draw_next_pair(
+            self.frequency, self.key, temp
+        )
+        return int(next_i), int(next_j)
 
     @staticmethod
     @jit
