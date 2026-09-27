@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from typing import TypedDict
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api import graphql_router, rebind_schema
@@ -30,9 +31,17 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[State]:
         session.close()
 
 
+async def health(request: Request) -> JSONResponse:
+    session: Session = request.state.session
+    if session.worker.healthy():
+        return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "unavailable"}, status_code=503)
+
+
 def create_app() -> FastAPI:
     configure_logging()
     application = FastAPI(lifespan=lifespan)
+    application.add_api_route("/health", health, methods=["GET"])
     application.include_router(graphql_router())
     application.add_middleware(RequestIdMiddleware)
     application.add_middleware(

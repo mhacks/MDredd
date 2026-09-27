@@ -36,6 +36,10 @@ class UnknownRowException(JudgingFailure):
     code: ClassVar[str] = "UNKNOWN_ROW"
 
 
+class WorkerUnavailableException(JudgingFailure):
+    code: ClassVar[str] = "WORKER_UNAVAILABLE"
+
+
 class InvalidColumnsException(JudgingFailure):
     code: ClassVar[str] = "INVALID_COLUMNS"
 

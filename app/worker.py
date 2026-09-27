@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 from collections.abc import Callable
 from typing import cast
 
@@ -27,8 +28,10 @@ from app.exceptions import (
     JudgingNotStartedException,
     TooFewEntitiesException,
     UnknownRowException,
+    WorkerUnavailableException,
 )
 from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +45,21 @@ class JudgeWorker:
     Pair draws and comparisons update the in-memory model, then commit that
     model and the one assignment. Entities stay as they were written at upload.
     The caller is answered only after the commit succeeds.
+
+    A caller waits at most `timeout` seconds for an answer. A job whose caller
+    has already given up is skipped, and a job still running after
+    `stuck_after` seconds marks the worker unhealthy.
     """
 
-    def __init__(self) -> None:
-        self.channel: queue.Queue[tuple[Job, Reply]] = queue.Queue()
+    def __init__(
+        self,
+        timeout: float = settings.WORKER_TIMEOUT_SECONDS,
+        stuck_after: float = settings.WORKER_STUCK_SECONDS,
+    ) -> None:
+        self.channel: queue.Queue[tuple[Job, Reply, threading.Event]] = queue.Queue()
+        self._timeout = timeout
+        self._stuck_after = stuck_after
+        self._busy_since: float | None = None
         self.bdp: BayesianDecisionProcess | None = None
         self.enabled = False
         self.headers: list[str] = []
@@ -68,9 +82,19 @@ class JudgeWorker:
         if not self._thread.is_alive():
             return
         reply: Reply = queue.Queue(maxsize=1)
-        self.channel.put((None, reply))
-        _ = reply.get()
+        self.channel.put((None, reply, threading.Event()))
+        try:
+            _ = reply.get(timeout=self._timeout)
+        except queue.Empty:
+            logger.error("Judge worker did not stop in time")
+            return
         self._thread.join(timeout=5)
+
+    def healthy(self) -> bool:
+        if not self._thread.is_alive():
+            return False
+        busy_since = self._busy_since
+        return busy_since is None or time.monotonic() - busy_since < self._stuck_after
 
     def get_enabled(self) -> bool:
         return self._call(lambda: self.enabled)
@@ -102,9 +126,17 @@ class JudgeWorker:
         return self._call(self._rankings_snapshot)
 
     def _call[T](self, fn: Callable[[], T]) -> T:
+        if not self._thread.is_alive():
+            raise WorkerUnavailableException()
         reply: Reply = queue.Queue(maxsize=1)
-        self.channel.put((fn, reply))
-        result = reply.get()
+        abandoned = threading.Event()
+        self.channel.put((fn, reply, abandoned))
+        try:
+            result = reply.get(timeout=self._timeout)
+        except queue.Empty:
+            abandoned.set()
+            logger.error("Judge worker did not answer in time")
+            raise WorkerUnavailableException() from None
         if isinstance(result, Exception):
             raise result
         return cast(T, result)
@@ -123,18 +155,35 @@ class JudgeWorker:
                 return
 
             while True:
-                job, reply = self.channel.get()
+                job, reply, abandoned = self.channel.get()
                 if job is None:
                     reply.put(None)
                     return
+                if abandoned.is_set():
+                    continue
+                self._busy_since = time.monotonic()
                 try:
                     reply.put(job())
                 except Exception as exc:
                     if not isinstance(exc, JudgingFailure):
                         logger.exception("Judge worker command failed")
                     reply.put(exc)
+                except BaseException:
+                    reply.put(WorkerUnavailableException())
+                    raise
+                finally:
+                    self._busy_since = None
         finally:
+            self._fail_pending()
             close_db()
+
+    def _fail_pending(self) -> None:
+        while True:
+            try:
+                job, reply, _abandoned = self.channel.get_nowait()
+            except queue.Empty:
+                return
+            reply.put(None if job is None else WorkerUnavailableException())
 
     def _bootstrap(self) -> None:
         open_db()
