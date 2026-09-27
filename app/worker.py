@@ -335,9 +335,10 @@ class JudgeWorker:
         return EntityWithId(attributes=dict(entity.attributes), id=index)
 
     def _rankings_snapshot(self) -> list[EntityWithId]:
-        if not self.enabled:
-            raise JudgingNotStartedException()
+        # Rankings stay readable after judging stops; only a missing model blocks them.
+        if self.bdp is None:
+            raise JudgingNeverStartedException()
         entities = self._entities
-        alphas = self._require_bdp().get_alphas()[: len(entities)]
+        alphas = self.bdp.get_alphas()[: len(entities)]
         ranked_ids = np.argsort(-alphas, kind="stable").tolist()
         return [self._with_id(entities[index], index) for index in ranked_ids]

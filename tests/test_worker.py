@@ -6,7 +6,7 @@ import pytest
 
 from app.db import db
 from app.entity import Entity
-from app.exceptions import JudgeDoesNotOwnPairException
+from app.exceptions import JudgeDoesNotOwnPairException, JudgingNeverStartedException
 from app.models import ComparisonInputModel, PairRequestModel
 from app.worker import JudgeWorker
 
@@ -127,3 +127,23 @@ def test_new_entities_clear_completed_comparisons(worker: JudgeWorker) -> None:
 
     with pytest.raises(JudgeDoesNotOwnPairException):
         submit(worker, pair, pair[0])
+
+
+def test_rankings_are_readable_after_judging_stops(worker: JudgeWorker) -> None:
+    pair = draw(worker)
+    submit(worker, pair, pair[1])
+    running = [entity.id for entity in worker.rankings()]
+
+    worker.stop()
+
+    assert [entity.id for entity in worker.rankings()] == running
+    assert running[0] == pair[1]
+
+
+def test_rankings_before_any_upload_are_rejected(db_path: Path) -> None:
+    worker = start_worker()
+    try:
+        with pytest.raises(JudgingNeverStartedException):
+            worker.rankings()
+    finally:
+        worker.shutdown()
