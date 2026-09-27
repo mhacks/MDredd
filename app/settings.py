@@ -1,11 +1,14 @@
 from typing import ClassVar
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _default_cors_origins() -> list[str]:
     return ["http://localhost:8000"]
+
+
+MIN_API_TOKEN_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -27,6 +30,17 @@ class Settings(BaseSettings):
     WORKER_TIMEOUT_SECONDS: float = 10
     WORKER_STUCK_SECONDS: float = 30
     WATCHDOG_INTERVAL_SECONDS: float = 5
+
+    @field_validator("API_TOKEN")
+    @classmethod
+    def require_strong_token(cls, token: str) -> str:
+        # Without a token every request is rejected, so fail at startup instead.
+        if len(token) < MIN_API_TOKEN_LENGTH:
+            raise ValueError(
+                f"MDREDD_API_TOKEN must be set to at least {MIN_API_TOKEN_LENGTH} "
+                "characters, e.g. the output of `openssl rand -hex 32`"
+            )
+        return token
 
 
 settings = Settings()
