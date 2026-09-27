@@ -9,3 +9,12 @@ __pycache__
 *.db
 *.db-journal
 *.csv
+
+.env
+.env.*
+.claude
+.github
+tests
+*.pdf
+
+.pytest_cache

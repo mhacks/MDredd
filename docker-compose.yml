@@ -14,6 +14,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MDREDD_DB_FILE=/app/data/mdredd.db
+      MDREDD_DB_FILE: /app/data/mdredd.db
+      MDREDD_API_TOKEN: ${MDREDD_API_TOKEN:?MDREDD_API_TOKEN must be set}
+      MDREDD_CORS_ORIGINS: ${MDREDD_CORS_ORIGINS:-["http://localhost:8000"]}
     volumes:
-      - ./data:/app/data
+      # A named volume starts out owned by the image's unprivileged user.
+      - mdredd-data:/app/data
+
+volumes:
+  mdredd-data:
