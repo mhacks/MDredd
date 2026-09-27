@@ -51,6 +51,7 @@ class JudgeWorker:
         self.headers: list[str] = []
         self._entities: list[Entity] = []
         self._assignments: dict[str, tuple[int, int]] = {}
+        self._completed: dict[str, tuple[int, int, int]] = {}
         self._ready = threading.Event()
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
@@ -184,8 +185,22 @@ class JudgeWorker:
         judge = comparison.uuid
         entity_id_1, entity_id_2 = comparison.entity_ids
         winner_id = comparison.winner_id
+        submitted = (min(entity_id_1, entity_id_2), max(entity_id_1, entity_id_2))
         pair = self._assignments.get(judge)
-        if pair is None or entity_id_1 not in pair or entity_id_2 not in pair:
+        if pair != submitted:
+            # A retry of a comparison that was already applied (for example
+            # after a lost response) succeeds without being counted again.
+            if self._completed.get(judge) == (*submitted, winner_id):
+                logger.info(
+                    "Ignored repeated comparison",
+                    extra={
+                        "event": "comparison_repeated",
+                        "user_id": judge,
+                        "entity_ids": [entity_id_1, entity_id_2],
+                        "winner_id": winner_id,
+                    },
+                )
+                return
             logger.info(
                 "Rejected comparison",
                 extra={
@@ -201,7 +216,8 @@ class JudgeWorker:
         def apply() -> None:
             self._require_bdp().submit_comparison(entity_id_1, entity_id_2, winner_id)
             del self._assignments[judge]
-            save_comparison(self._require_bdp(), judge)
+            self._completed[judge] = (*submitted, winner_id)
+            save_comparison(self._require_bdp(), judge, self._completed[judge])
 
         self._persist(apply)
         logger.info(
@@ -228,7 +244,12 @@ class JudgeWorker:
                 logger.exception("Judge worker failed to reload after a write")
                 self._install(
                     JudgeRecord(
-                        enabled=False, headers=[], entities=[], assignments={}, bdp=None
+                        enabled=False,
+                        headers=[],
+                        entities=[],
+                        assignments={},
+                        completed={},
+                        bdp=None,
                     )
                 )
             raise
@@ -238,6 +259,7 @@ class JudgeWorker:
         self.headers = list(record.headers)
         self._entities = list(record.entities)
         self._assignments = dict(record.assignments)
+        self._completed = dict(record.completed)
         self.bdp = record.bdp
 
     def _reload(self) -> None:

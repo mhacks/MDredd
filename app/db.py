@@ -50,6 +50,17 @@ class Assignment(Model):
         table_name = "assignments"
 
 
+class CompletedComparison(Model):
+    judge_id = TextField(primary_key=True)
+    entity_id_1 = IntegerField()
+    entity_id_2 = IntegerField()
+    winner_id = IntegerField()
+
+    class Meta:
+        database = db
+        table_name = "completed_comparisons"
+
+
 class JudgeState(Model):
     id = IntegerField(primary_key=True)
     alpha = BlobField()
@@ -75,13 +86,16 @@ class JudgeRecord:
     headers: list[str]
     entities: list[Entity]
     assignments: dict[str, tuple[int, int]]
+    completed: dict[str, tuple[int, int, int]]
     bdp: BayesianDecisionProcess | None
 
 
 def open_db() -> None:
     if db.is_closed():
         db.connect()
-    db.create_tables([Judge, EntityRow, Assignment, JudgeState, EntityState])
+    db.create_tables(
+        [Judge, EntityRow, Assignment, CompletedComparison, JudgeState, EntityState]
+    )
     _migrate_legacy_state()
 
 
@@ -98,6 +112,10 @@ def load_state() -> JudgeRecord:
     assignments = {
         row.judge_id: (row.entity_id_1, row.entity_id_2) for row in Assignment.select()
     }
+    completed = {
+        row.judge_id: (row.entity_id_1, row.entity_id_2, row.winner_id)
+        for row in CompletedComparison.select()
+    }
     judge = Judge.get_or_none(Judge.id == 1)
     if judge is None:
         return JudgeRecord(
@@ -105,6 +123,7 @@ def load_state() -> JudgeRecord:
             headers=[],
             entities=entities,
             assignments=assignments,
+            completed=completed,
             bdp=None,
         )
     model = _load_model(len(entities))
@@ -113,6 +132,7 @@ def load_state() -> JudgeRecord:
         headers=list(judge.headers),
         entities=entities,
         assignments=assignments,
+        completed=completed,
         bdp=model,
     )
 
@@ -125,12 +145,14 @@ def replace_state(
         headers=list(headers),
         entities=list(entities),
         assignments={},
+        completed={},
         bdp=bdp,
     )
     with db.atomic():
         EntityRow.delete().execute()
         EntityState.delete().execute()
         Assignment.delete().execute()
+        CompletedComparison.delete().execute()
         if record.entities:
             EntityRow.insert_many(
                 [
@@ -194,7 +216,10 @@ def save_assignment(
         ).execute()
 
 
-def save_comparison(bdp: BayesianDecisionProcess, judge_id: str) -> None:
+def save_comparison(
+    bdp: BayesianDecisionProcess, judge_id: str, completed: tuple[int, int, int]
+) -> None:
+    entity_id_1, entity_id_2, winner_id = completed
     with db.atomic():
         updated = (
             JudgeState.update(alpha=_array_bytes(bdp.alpha_t, np.dtype("<f4")))
@@ -204,6 +229,12 @@ def save_comparison(bdp: BayesianDecisionProcess, judge_id: str) -> None:
         if updated != 1:
             raise RuntimeError("Judge state is missing")
         Assignment.delete().where(Assignment.judge_id == judge_id).execute()
+        CompletedComparison.replace(
+            judge_id=judge_id,
+            entity_id_1=entity_id_1,
+            entity_id_2=entity_id_2,
+            winner_id=winner_id,
+        ).execute()
 
 
 def save_enabled(enabled: bool) -> None:
