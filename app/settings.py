@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     SUBMIT_REFILL_PER_SECOND: float = 1 / 60
     ADMIN_CAPACITY: int = 4
     ADMIN_REFILL_PER_SECOND: float = 1 / 30
+    WORKER_TIMEOUT_SECONDS: float = 10
+    WORKER_STUCK_SECONDS: float = 30
+    WATCHDOG_INTERVAL_SECONDS: float = 5
 
 
 settings = Settings()

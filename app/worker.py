@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 from collections.abc import Callable
 from typing import cast
 
@@ -27,8 +28,10 @@ from app.exceptions import (
     JudgingNotStartedException,
     TooFewEntitiesException,
     UnknownRowException,
+    WorkerUnavailableException,
 )
 from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +45,27 @@ class JudgeWorker:
     Pair draws and comparisons update the in-memory model, then commit that
     model and the one assignment. Entities stay as they were written at upload.
     The caller is answered only after the commit succeeds.
+
+    A caller waits at most `timeout` seconds for an answer. A job whose caller
+    has already given up is skipped, and a job still running after
+    `stuck_after` seconds marks the worker unhealthy.
     """
 
-    def __init__(self) -> None:
-        self.channel: queue.Queue[tuple[Job, Reply]] = queue.Queue()
+    def __init__(
+        self,
+        timeout: float = settings.WORKER_TIMEOUT_SECONDS,
+        stuck_after: float = settings.WORKER_STUCK_SECONDS,
+    ) -> None:
+        self.channel: queue.Queue[tuple[Job, Reply, threading.Event]] = queue.Queue()
+        self._timeout = timeout
+        self._stuck_after = stuck_after
+        self._busy_since: float | None = None
         self.bdp: BayesianDecisionProcess | None = None
         self.enabled = False
         self.headers: list[str] = []
         self._entities: list[Entity] = []
         self._assignments: dict[str, tuple[int, int]] = {}
+        self._completed: dict[str, tuple[int, int, int]] = {}
         self._ready = threading.Event()
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
@@ -67,9 +82,19 @@ class JudgeWorker:
         if not self._thread.is_alive():
             return
         reply: Reply = queue.Queue(maxsize=1)
-        self.channel.put((None, reply))
-        _ = reply.get()
+        self.channel.put((None, reply, threading.Event()))
+        try:
+            _ = reply.get(timeout=self._timeout)
+        except queue.Empty:
+            logger.error("Judge worker did not stop in time")
+            return
         self._thread.join(timeout=5)
+
+    def healthy(self) -> bool:
+        if not self._thread.is_alive():
+            return False
+        busy_since = self._busy_since
+        return busy_since is None or time.monotonic() - busy_since < self._stuck_after
 
     def get_enabled(self) -> bool:
         return self._call(lambda: self.enabled)
@@ -101,9 +126,17 @@ class JudgeWorker:
         return self._call(self._rankings_snapshot)
 
     def _call[T](self, fn: Callable[[], T]) -> T:
+        if not self._thread.is_alive():
+            raise WorkerUnavailableException()
         reply: Reply = queue.Queue(maxsize=1)
-        self.channel.put((fn, reply))
-        result = reply.get()
+        abandoned = threading.Event()
+        self.channel.put((fn, reply, abandoned))
+        try:
+            result = reply.get(timeout=self._timeout)
+        except queue.Empty:
+            abandoned.set()
+            logger.error("Judge worker did not answer in time")
+            raise WorkerUnavailableException() from None
         if isinstance(result, Exception):
             raise result
         return cast(T, result)
@@ -122,18 +155,35 @@ class JudgeWorker:
                 return
 
             while True:
-                job, reply = self.channel.get()
+                job, reply, abandoned = self.channel.get()
                 if job is None:
                     reply.put(None)
                     return
+                if abandoned.is_set():
+                    continue
+                self._busy_since = time.monotonic()
                 try:
                     reply.put(job())
                 except Exception as exc:
                     if not isinstance(exc, JudgingFailure):
                         logger.exception("Judge worker command failed")
                     reply.put(exc)
+                except BaseException:
+                    reply.put(WorkerUnavailableException())
+                    raise
+                finally:
+                    self._busy_since = None
         finally:
+            self._fail_pending()
             close_db()
+
+    def _fail_pending(self) -> None:
+        while True:
+            try:
+                job, reply, _abandoned = self.channel.get_nowait()
+            except queue.Empty:
+                return
+            reply.put(None if job is None else WorkerUnavailableException())
 
     def _bootstrap(self) -> None:
         open_db()
@@ -184,8 +234,22 @@ class JudgeWorker:
         judge = comparison.uuid
         entity_id_1, entity_id_2 = comparison.entity_ids
         winner_id = comparison.winner_id
+        submitted = (min(entity_id_1, entity_id_2), max(entity_id_1, entity_id_2))
         pair = self._assignments.get(judge)
-        if pair is None or entity_id_1 not in pair or entity_id_2 not in pair:
+        if pair != submitted:
+            # A retry of a comparison that was already applied (for example
+            # after a lost response) succeeds without being counted again.
+            if self._completed.get(judge) == (*submitted, winner_id):
+                logger.info(
+                    "Ignored repeated comparison",
+                    extra={
+                        "event": "comparison_repeated",
+                        "user_id": judge,
+                        "entity_ids": [entity_id_1, entity_id_2],
+                        "winner_id": winner_id,
+                    },
+                )
+                return
             logger.info(
                 "Rejected comparison",
                 extra={
@@ -201,7 +265,8 @@ class JudgeWorker:
         def apply() -> None:
             self._require_bdp().submit_comparison(entity_id_1, entity_id_2, winner_id)
             del self._assignments[judge]
-            save_comparison(self._require_bdp(), judge)
+            self._completed[judge] = (*submitted, winner_id)
+            save_comparison(self._require_bdp(), judge, self._completed[judge])
 
         self._persist(apply)
         logger.info(
@@ -228,7 +293,12 @@ class JudgeWorker:
                 logger.exception("Judge worker failed to reload after a write")
                 self._install(
                     JudgeRecord(
-                        enabled=False, headers=[], entities=[], assignments={}, bdp=None
+                        enabled=False,
+                        headers=[],
+                        entities=[],
+                        assignments={},
+                        completed={},
+                        bdp=None,
                     )
                 )
             raise
@@ -238,6 +308,7 @@ class JudgeWorker:
         self.headers = list(record.headers)
         self._entities = list(record.entities)
         self._assignments = dict(record.assignments)
+        self._completed = dict(record.completed)
         self.bdp = record.bdp
 
     def _reload(self) -> None:
@@ -264,9 +335,10 @@ class JudgeWorker:
         return EntityWithId(attributes=dict(entity.attributes), id=index)
 
     def _rankings_snapshot(self) -> list[EntityWithId]:
-        if not self.enabled:
-            raise JudgingNotStartedException()
+        # Rankings stay readable after judging stops; only a missing model blocks them.
+        if self.bdp is None:
+            raise JudgingNeverStartedException()
         entities = self._entities
-        alphas = self._require_bdp().get_alphas()[: len(entities)]
+        alphas = self.bdp.get_alphas()[: len(entities)]
         ranked_ids = np.argsort(-alphas, kind="stable").tolist()
         return [self._with_id(entities[index], index) for index in ranked_ids]
