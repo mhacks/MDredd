@@ -1,7 +1,10 @@
+import csv
 import io
 
 import pandas as pd
 from pydantic import BaseModel
+
+from app.exceptions import InvalidColumnsException, TooFewEntitiesException
 
 
 class Entity(BaseModel):
@@ -9,10 +12,43 @@ class Entity(BaseModel):
 
     @staticmethod
     def list_from_csv(raw_csv: bytes) -> tuple[list[str], list[Entity]]:
-        frame = pd.read_csv(io.BytesIO(raw_csv), dtype=str, keep_default_na=False)
-        columns = [str(column) for column in frame.columns]
+        try:
+            text = raw_csv.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise InvalidColumnsException([]) from exc
+        headers = _header_row(text)
+        _require_headers(headers)
+        try:
+            frame = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
+        except pd.errors.EmptyDataError as exc:
+            raise TooFewEntitiesException() from exc
+        except pd.errors.ParserError as exc:
+            raise InvalidColumnsException([]) from exc
+        if [str(column) for column in frame.columns] != headers:
+            raise InvalidColumnsException(headers)
         entities = [
-            Entity(attributes={column: str(row[column]) for column in columns})
-            for _, row in frame.iterrows()
+            Entity(attributes=dict(zip(headers, map(str, row), strict=True)))
+            for row in frame.itertuples(index=False, name=None)
         ]
-        return columns, entities
+        return headers, entities
+
+
+def _header_row(text: str) -> list[str]:
+    try:
+        return next(csv.reader(io.StringIO(text)))
+    except StopIteration as exc:
+        raise TooFewEntitiesException() from exc
+    except csv.Error as exc:
+        raise InvalidColumnsException([]) from exc
+
+
+def _require_headers(headers: list[str]) -> None:
+    seen: set[str] = set()
+    invalid: list[str] = []
+    for header in headers:
+        if header == "" or header in seen:
+            invalid.append(header)
+            continue
+        seen.add(header)
+    if invalid:
+        raise InvalidColumnsException(invalid)

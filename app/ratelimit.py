@@ -2,10 +2,12 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 from app.settings import settings
 
 Bucket = tuple[float, float]
+Operation = Literal["admin", "pair", "submit"]
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,7 @@ class TokenBucket:
         with self._lock:
             self._buckets.clear()
 
-    def try_consume(self, operation: str) -> LimitResult:
+    def try_consume(self, operation: Operation) -> LimitResult:
         now = time.monotonic()
         capacity, refill = _limits(operation)
         with self._lock:
@@ -49,12 +51,14 @@ class TokenBucket:
             )
 
 
-def _limits(operation: str) -> tuple[int, float]:
-    if operation == "pair":
-        return settings.PAIR_CAPACITY, settings.PAIR_REFILL_PER_SECOND
-    if operation == "submit":
-        return settings.SUBMIT_CAPACITY, settings.SUBMIT_REFILL_PER_SECOND
-    return settings.ADMIN_CAPACITY, settings.ADMIN_REFILL_PER_SECOND
+def _limits(operation: Operation) -> tuple[int, float]:
+    match operation:
+        case "pair":
+            return settings.PAIR_CAPACITY, settings.PAIR_REFILL_PER_SECOND
+        case "submit":
+            return settings.SUBMIT_CAPACITY, settings.SUBMIT_REFILL_PER_SECOND
+        case "admin":
+            return settings.ADMIN_CAPACITY, settings.ADMIN_REFILL_PER_SECOND
 
 
 limiter = TokenBucket()

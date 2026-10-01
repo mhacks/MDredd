@@ -108,11 +108,11 @@ class JudgeWorker:
     def replace_entities(self, entities: list[Entity], headers: list[str]) -> None:
         self._call(lambda: self._replace_entities(entities, headers))
 
-    def resume(self) -> None:
-        self._call(lambda: self._set_enabled(True))
+    def resume(self) -> bool:
+        return self._call(lambda: self._set_enabled(True))
 
-    def stop(self) -> None:
-        self._call(lambda: self._set_enabled(False))
+    def stop(self) -> bool:
+        return self._call(lambda: self._set_enabled(False))
 
     def request_pair(
         self, pair_request: PairRequestModel
@@ -197,7 +197,7 @@ class JudgeWorker:
         bdp = BayesianDecisionProcess.create(len(entities))
         self._install(replace_state(headers, entities, bdp))
 
-    def _set_enabled(self, enabled: bool) -> None:
+    def _set_enabled(self, enabled: bool) -> bool:
         if enabled:
             if self.enabled:
                 raise JudgingAlreadyStartedException()
@@ -207,6 +207,7 @@ class JudgeWorker:
             raise JudgingNotStartedException()
         self.enabled = enabled
         self._commit()
+        return enabled
 
     def _get_pair(
         self, pair_request: PairRequestModel
@@ -214,7 +215,7 @@ class JudgeWorker:
         if not self.enabled:
             raise JudgingNotStartedException()
         assigned = (
-            None if pair_request.force else self._assignments.get(pair_request.uuid)
+            None if pair_request.force else self._assignments.get(pair_request.judge_id)
         )
         if assigned is not None:
             return self._pair(*assigned)
@@ -222,8 +223,8 @@ class JudgeWorker:
         def draw() -> tuple[int, int]:
             bdp = self._require_bdp()
             i, j = bdp.get_next_pair()
-            self._assignments[pair_request.uuid] = (i, j)
-            save_assignment(bdp, pair_request.uuid, (i, j))
+            self._assignments[pair_request.judge_id] = (i, j)
+            save_assignment(bdp, pair_request.judge_id, (i, j))
             return i, j
 
         return self._pair(*self._persist(draw))
@@ -231,7 +232,7 @@ class JudgeWorker:
     def _submit(self, comparison: ComparisonInputModel) -> None:
         if not self.enabled:
             raise JudgingNotStartedException()
-        judge = comparison.uuid
+        judge = comparison.judge_id
         entity_id_1, entity_id_2 = comparison.entity_ids
         winner_id = comparison.winner_id
         submitted = (min(entity_id_1, entity_id_2), max(entity_id_1, entity_id_2))

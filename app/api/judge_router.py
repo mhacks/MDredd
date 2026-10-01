@@ -1,56 +1,47 @@
-from typing import Any
+from fastapi import APIRouter, Depends, status
 
-import strawberry
+from app.api.deps import SessionDep, limited, require_session
+from app.api.errors import error_responses
+from app.models import (
+    ComparisonInputModel,
+    ComparisonResultModel,
+    PairModel,
+    PairRequestModel,
+    RowModel,
+)
 
-from app.api.guard import pair_limit, submit_limit
-from app.api.types import GraphQLContext, run_judging
-from app.columns import Column, materialize_all
-from app.exceptions import IncorrectPairFormatException
-from app.models import ComparisonInputModel, PairRequestModel
-
-JUDGE_ID = "api"
+router = APIRouter(
+    tags=["judge"],
+    dependencies=[Depends(require_session)],
+    responses=error_responses(status.HTTP_503_SERVICE_UNAVAILABLE),
+)
 
 
-def build_judge(
-    row_type: type[Any],
-    columns: list[Column],
-) -> tuple[type[Any], type[Any]]:
-    @strawberry.type
-    class JudgeQuery:
-        @strawberry.field(permission_classes=[pair_limit], graphql_type=list[row_type])
-        async def pair(
-            self,
-            info: strawberry.Info[GraphQLContext],
-            force: bool = False,
-        ) -> Any:
-            worker = info.context.session.worker
-            request = PairRequestModel(uuid=JUDGE_ID, force=force)
-            left, right = await run_judging(lambda: worker.request_pair(request))
-            return materialize_all(columns, row_type, [left, right])
+@router.post(
+    "/pairs",
+    response_model=PairModel,
+    description="Draw this judge's open pair, or return the pair they already hold.",
+    response_description="The two rows to compare.",
+    dependencies=[limited("pair")],
+    responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
+)
+def create_pair(body: PairRequestModel, session: SessionDep) -> PairModel:
+    left, right = session.worker.request_pair(body)
+    return PairModel(
+        pair=(RowModel.from_entity(left), RowModel.from_entity(right))
+    )
 
-    @strawberry.type
-    class JudgeMutation:
-        @strawberry.mutation(permission_classes=[submit_limit])
-        async def submit_comparison(
-            self,
-            info: strawberry.Info[GraphQLContext],
-            entity_ids: list[int],
-            winner_id: int,
-        ) -> bool:
-            worker = info.context.session.worker
 
-            def submit() -> None:
-                if len(entity_ids) != 2:
-                    raise IncorrectPairFormatException()
-                worker.submit(
-                    ComparisonInputModel(
-                        uuid=JUDGE_ID,
-                        entity_ids=(entity_ids[0], entity_ids[1]),
-                        winner_id=winner_id,
-                    )
-                )
-
-            await run_judging(submit)
-            return True
-
-    return JudgeQuery, JudgeMutation
+@router.post(
+    "/comparisons",
+    response_model=ComparisonResultModel,
+    description="Record the winner of this judge's open pair.",
+    response_description="The comparison was recorded.",
+    dependencies=[limited("submit")],
+    responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
+)
+def submit_comparison(
+    body: ComparisonInputModel, session: SessionDep
+) -> ComparisonResultModel:
+    session.worker.submit(body)
+    return ComparisonResultModel(ok=True)
