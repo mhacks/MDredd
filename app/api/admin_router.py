@@ -1,85 +1,56 @@
-from collections.abc import Callable
-from typing import Any
+from fastapi import APIRouter, UploadFile
 
-import strawberry
-from fastapi import UploadFile
+from app.api.deps import SessionDep, limited
+from app.models import ColumnsModel, DatasetModel, JudgingModel, RowModel
 
-from app.api.guard import admin_limit
-from app.api.types import GraphQLContext, JudgingSession, run_judging
-from app.columns import Column, materialize, materialize_all
+router = APIRouter(tags=["admin"])
 
 
-@strawberry.type(name="Column")
-class ColumnRecord:
-    field: str
-    header: str
+@router.post("/datasets", response_model=DatasetModel, dependencies=[limited("admin")])
+def create_dataset(session: SessionDep, entities_csv: UploadFile) -> DatasetModel:
+    headers = session.start(entities_csv.file.read())
+    return DatasetModel(is_started=True, headers=headers)
 
 
-def build_admin(
-    row_type: type[Any],
-    columns: list[Column],
-    rebind: Callable[[list[Column]], None],
-) -> tuple[type[Any], type[Any]]:
-    @strawberry.type
-    class AdminQuery:
-        @strawberry.field
-        async def session(self, info: strawberry.Info[GraphQLContext]) -> JudgingSession:
-            worker = info.context.session.worker
-            return JudgingSession(is_started=await run_judging(worker.get_enabled))
+@router.get("/judging", response_model=JudgingModel)
+def get_judging(session: SessionDep) -> JudgingModel:
+    return JudgingModel(is_started=session.worker.get_enabled())
 
-        @strawberry.field
-        def columns(self) -> list[ColumnRecord]:
-            return [
-                ColumnRecord(field=column.field, header=column.header)
-                for column in columns
-            ]
 
-        @strawberry.field(graphql_type=row_type)
-        async def row(self, info: strawberry.Info[GraphQLContext], id: int) -> Any:
-            worker = info.context.session.worker
-            return materialize(
-                columns, row_type, await run_judging(lambda: worker.get_row(id))
-            )
+@router.post(
+    "/judging/start", response_model=JudgingModel, dependencies=[limited("admin")]
+)
+def start_judging(session: SessionDep) -> JudgingModel:
+    session.worker.resume()
+    return JudgingModel(is_started=session.worker.get_enabled())
 
-        @strawberry.field(graphql_type=list[row_type])
-        async def rankings(self, info: strawberry.Info[GraphQLContext]) -> Any:
-            worker = info.context.session.worker
-            return materialize_all(
-                columns, row_type, await run_judging(worker.rankings)
-            )
 
-    @strawberry.type
-    class AdminMutation:
-        @strawberry.mutation(permission_classes=[admin_limit])
-        async def start_judging(
-            self,
-            info: strawberry.Info[GraphQLContext],
-            entities_csv: UploadFile | None = None,
-        ) -> JudgingSession:
-            session = info.context.session
-            if entities_csv is None:
-                await run_judging(session.worker.resume)
-            else:
-                csv_bytes = await entities_csv.read()
-                rebind(await run_judging(lambda: session.start(csv_bytes)))
-            return JudgingSession(
-                is_started=await run_judging(session.worker.get_enabled)
-            )
+@router.post(
+    "/judging/stop", response_model=JudgingModel, dependencies=[limited("admin")]
+)
+def stop_judging(session: SessionDep) -> JudgingModel:
+    session.worker.stop()
+    return JudgingModel(is_started=session.worker.get_enabled())
 
-        @strawberry.mutation(permission_classes=[admin_limit])
-        async def stop_judging(
-            self, info: strawberry.Info[GraphQLContext]
-        ) -> JudgingSession:
-            worker = info.context.session.worker
-            await run_judging(worker.stop)
-            return JudgingSession(is_started=await run_judging(worker.get_enabled))
 
-        @strawberry.mutation(permission_classes=[admin_limit])
-        async def resume_judging(
-            self, info: strawberry.Info[GraphQLContext]
-        ) -> JudgingSession:
-            worker = info.context.session.worker
-            await run_judging(worker.resume)
-            return JudgingSession(is_started=await run_judging(worker.get_enabled))
+@router.post(
+    "/judging/resume", response_model=JudgingModel, dependencies=[limited("admin")]
+)
+def resume_judging(session: SessionDep) -> JudgingModel:
+    session.worker.resume()
+    return JudgingModel(is_started=session.worker.get_enabled())
 
-    return AdminQuery, AdminMutation
+
+@router.get("/columns", response_model=ColumnsModel)
+def get_columns(session: SessionDep) -> ColumnsModel:
+    return ColumnsModel(headers=session.worker.get_headers())
+
+
+@router.get("/rows/{row_id}", response_model=RowModel)
+def get_row(row_id: int, session: SessionDep) -> RowModel:
+    return RowModel.from_entity(session.worker.get_row(row_id))
+
+
+@router.get("/rankings", response_model=list[RowModel])
+def get_rankings(session: SessionDep) -> list[RowModel]:
+    return [RowModel.from_entity(entity) for entity in session.worker.rankings()]

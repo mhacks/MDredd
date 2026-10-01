@@ -214,7 +214,7 @@ class JudgeWorker:
         if not self.enabled:
             raise JudgingNotStartedException()
         assigned = (
-            None if pair_request.force else self._assignments.get(pair_request.uuid)
+            None if pair_request.force else self._assignments.get(pair_request.judge_id)
         )
         if assigned is not None:
             return self._pair(*assigned)
@@ -222,8 +222,8 @@ class JudgeWorker:
         def draw() -> tuple[int, int]:
             bdp = self._require_bdp()
             i, j = bdp.get_next_pair()
-            self._assignments[pair_request.uuid] = (i, j)
-            save_assignment(bdp, pair_request.uuid, (i, j))
+            self._assignments[pair_request.judge_id] = (i, j)
+            save_assignment(bdp, pair_request.judge_id, (i, j))
             return i, j
 
         return self._pair(*self._persist(draw))
@@ -231,7 +231,7 @@ class JudgeWorker:
     def _submit(self, comparison: ComparisonInputModel) -> None:
         if not self.enabled:
             raise JudgingNotStartedException()
-        judge = comparison.uuid
+        judge = comparison.judge_id
         entity_id_1, entity_id_2 = comparison.entity_ids
         winner_id = comparison.winner_id
         submitted = (min(entity_id_1, entity_id_2), max(entity_id_1, entity_id_2))

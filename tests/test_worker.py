@@ -37,13 +37,13 @@ def start_worker() -> JudgeWorker:
 
 
 def draw(worker: JudgeWorker) -> tuple[int, int]:
-    left, right = worker.request_pair(PairRequestModel(uuid=JUDGE))
+    left, right = worker.request_pair(PairRequestModel(judge_id=JUDGE))
     return left.id, right.id
 
 
 def submit(worker: JudgeWorker, pair: tuple[int, int], winner: int) -> None:
     worker.submit(
-        ComparisonInputModel(uuid=JUDGE, entity_ids=pair, winner_id=winner)
+        ComparisonInputModel(judge_id=JUDGE, entity_ids=pair, winner_id=winner)
     )
 
 

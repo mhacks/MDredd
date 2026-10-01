@@ -1,16 +1,16 @@
 import logging
 import os
 
-import strawberry
+from fastapi import APIRouter
 
-from app.api.guard import admin_limit
+from app.api.deps import SessionDep, limited
 
 logger = logging.getLogger(__name__)
 
+router = APIRouter(prefix="/dev", tags=["dev"])
 
-@strawberry.type
-class DevMutation:
-    @strawberry.mutation(permission_classes=[admin_limit])
-    def crash(self) -> bool:
-        logger.warning("Dev crash mutation invoked")
-        os._exit(1)
+
+@router.post("/crash", dependencies=[limited("admin")])
+def crash(_session: SessionDep) -> bool:
+    logger.warning("Dev crash route invoked")
+    os._exit(1)

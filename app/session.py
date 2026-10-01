@@ -3,7 +3,6 @@ import os
 import threading
 from collections.abc import Callable
 
-from app.columns import Column, graphql_columns
 from app.entity import Entity
 from app.settings import settings
 from app.worker import JudgeWorker
@@ -32,11 +31,10 @@ class Session:
         self._closed.set()
         self.worker.shutdown()
 
-    def start(self, entity_csv: bytes) -> list[Column]:
+    def start(self, entity_csv: bytes) -> list[str]:
         headers, entities = Entity.list_from_csv(entity_csv)
-        columns = graphql_columns(headers)
         self.worker.replace_entities(entities, headers)
-        return columns
+        return headers
 
     def _watch(self) -> None:
         while not self._closed.wait(settings.WATCHDOG_INTERVAL_SECONDS):

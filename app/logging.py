@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -84,3 +85,39 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send_with_id)
         finally:
             request_id.reset(token)
+
+
+class AccessLogMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") == "/health":
+            await self.app(scope, receive, send)
+            return
+        started = time.perf_counter()
+        status_code = 500
+
+        async def send_with_status(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = int(message["status"])
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_status)
+        finally:
+            state = scope.get("state")
+            remaining = (
+                getattr(state, "rate_limit_remaining", None)
+                if state is not None
+                else None
+            )
+            extra: dict[str, object] = {
+                "operation": f"{scope.get('method', '')} {scope.get('path', '')}",
+                "status": status_code,
+                "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+            }
+            if isinstance(remaining, int):
+                extra["rate_limit_remaining"] = remaining
+            logging.getLogger(__name__).info("http request", extra=extra)
