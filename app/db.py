@@ -17,7 +17,15 @@ from app.algorithm import BayesianDecisionProcess
 from app.entity import Entity
 from app.settings import settings
 
-db = SqliteDatabase(settings.DB_FILE, pragmas={"journal_mode": "wal"})
+# FULL fsyncs each commit. A lock waits one second, then the worker fails the command.
+db = SqliteDatabase(
+    settings.DB_FILE,
+    pragmas={
+        "journal_mode": "wal",
+        "synchronous": "FULL",
+        "busy_timeout": 1000,
+    },
+)
 
 
 class Judge(Model):
@@ -105,36 +113,39 @@ def close_db() -> None:
 
 
 def load_state() -> JudgeRecord:
-    entities = [
-        Entity(attributes=row.attributes)
-        for row in EntityRow.select().order_by(EntityRow.id)
-    ]
-    assignments = {
-        row.judge_id: (row.entity_id_1, row.entity_id_2) for row in Assignment.select()
-    }
-    completed = {
-        row.judge_id: (row.entity_id_1, row.entity_id_2, row.winner_id)
-        for row in CompletedComparison.select()
-    }
-    judge = Judge.get_or_none(Judge.id == 1)
-    if judge is None:
+    # One read transaction so the tables are a single snapshot.
+    with db.atomic():
+        entities = [
+            Entity(attributes=row.attributes)
+            for row in EntityRow.select().order_by(EntityRow.id)
+        ]
+        assignments = {
+            row.judge_id: (row.entity_id_1, row.entity_id_2)
+            for row in Assignment.select()
+        }
+        completed = {
+            row.judge_id: (row.entity_id_1, row.entity_id_2, row.winner_id)
+            for row in CompletedComparison.select()
+        }
+        judge = Judge.get_or_none(Judge.id == 1)
+        if judge is None:
+            return JudgeRecord(
+                enabled=False,
+                headers=[],
+                entities=entities,
+                assignments=assignments,
+                completed=completed,
+                bdp=None,
+            )
+        model = _load_model(len(entities))
         return JudgeRecord(
-            enabled=False,
-            headers=[],
+            enabled=bool(judge.enabled) and model is not None,
+            headers=list(judge.headers),
             entities=entities,
             assignments=assignments,
             completed=completed,
-            bdp=None,
+            bdp=model,
         )
-    model = _load_model(len(entities))
-    return JudgeRecord(
-        enabled=bool(judge.enabled) and model is not None,
-        headers=list(judge.headers),
-        entities=entities,
-        assignments=assignments,
-        completed=completed,
-        bdp=model,
-    )
 
 
 def replace_state(
@@ -182,13 +193,11 @@ def replace_state(
 
 
 def save_assignment(
-    bdp: BayesianDecisionProcess, judge_id: str, pair: tuple[int, int]
+    frequency: Any, key: Any, judge_id: str, pair: tuple[int, int]
 ) -> None:
     left, right = pair
-    frequencies = (
-        int(bdp.frequency[left]),
-        int(bdp.frequency[right]),
-    )
+    stored_frequency = np.asarray(frequency)
+    frequencies = (int(stored_frequency[left]), int(stored_frequency[right]))
     with db.atomic():
         updated = (
             EntityState.update(
@@ -203,7 +212,7 @@ def save_assignment(
         if updated != 2:
             raise RuntimeError("Pair state is missing")
         updated = (
-            JudgeState.update(key=_array_bytes(bdp.key, np.dtype("<u4")))
+            JudgeState.update(key=_array_bytes(key, np.dtype("<u4")))
             .where(JudgeState.id == 1)
             .execute()
         )
@@ -217,12 +226,12 @@ def save_assignment(
 
 
 def save_comparison(
-    bdp: BayesianDecisionProcess, judge_id: str, completed: tuple[int, int, int]
+    alpha: Any, judge_id: str, completed: tuple[int, int, int]
 ) -> None:
     entity_id_1, entity_id_2, winner_id = completed
     with db.atomic():
         updated = (
-            JudgeState.update(alpha=_array_bytes(bdp.alpha_t, np.dtype("<f4")))
+            JudgeState.update(alpha=_array_bytes(alpha, np.dtype("<f4")))
             .where(JudgeState.id == 1)
             .execute()
         )

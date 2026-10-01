@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     ADMIN_REFILL_PER_SECOND: float = 1 / 30
     WORKER_TIMEOUT_SECONDS: float = 10
     WORKER_STUCK_SECONDS: float = 30
+    WORKER_QUEUE_SIZE: int = 8
     WATCHDOG_INTERVAL_SECONDS: float = 5
 
     @field_validator("API_TOKEN")

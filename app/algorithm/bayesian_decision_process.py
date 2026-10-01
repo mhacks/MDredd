@@ -125,19 +125,21 @@ class BayesianDecisionProcess(BaseModel):
             "key": self.key.tolist(),
         }
 
-    def submit_comparison(self, i: int, j: int, winner: int):
-        Y_ij = 1 if winner == i else -1
-        self.alpha_t = BayesianDecisionProcess.MM(self.alpha_t, i, j, Y_ij)
+    def propose_comparison(self, i: int, j: int, winner: int) -> jnp.ndarray:
+        outcome = 1 if winner == i else -1
+        return BayesianDecisionProcess.MM(self.alpha_t, i, j, outcome)
 
-    def get_next_pair(self, temp: float = 1.0) -> tuple[int, int]:
+    def propose_pair(
+        self, temp: float = 1.0
+    ) -> tuple[int, int, jnp.ndarray, jnp.ndarray]:
         if self.K < 2:
             raise ValueError("At least two entities are required to draw a pair")
         if not temp > 0:
             raise ValueError("Pair sampling temperature must be positive")
-        self.frequency, self.key, next_i, next_j = _draw_next_pair(
+        frequency, key, next_i, next_j = _draw_next_pair(
             self.frequency, self.key, temp
         )
-        return int(next_i), int(next_j)
+        return int(next_i), int(next_j), frequency, key
 
     @staticmethod
     @jit
