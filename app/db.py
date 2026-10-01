@@ -17,8 +17,7 @@ from app.algorithm import BayesianDecisionProcess
 from app.entity import Entity
 from app.settings import settings
 
-# FULL fsyncs each WAL commit so it survives power loss. A locked database
-# fails in one second instead of stalling the single worker thread.
+# FULL fsyncs each commit. A lock waits one second, then the worker fails the command.
 db = SqliteDatabase(
     settings.DB_FILE,
     pragmas={

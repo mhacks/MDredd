@@ -43,14 +43,11 @@ Reply = queue.Queue[object]
 class JudgeWorker:
     """Owns the Bayesian judge on one thread.
 
-    Each command computes its next state, commits that state, and only then
-    publishes it. The caller is answered after the commit. Repeating a command
-    that already landed is success: a comparison is not applied twice, and
-    start, stop, and the same dataset upload report the state already stored.
-
-    A caller waits at most `timeout` seconds. The queue holds at most
-    `queue_size` commands. A full queue, a dead thread, or a command still
-    running after `stuck_after` seconds is refused.
+    A command commits its next state, then publishes it, and the caller is
+    answered after that commit. Repeating a command that already landed reports
+    the stored state. Callers wait at most `timeout` seconds. A full queue, a
+    dead thread, or a command running longer than `stuck_after` seconds is
+    refused.
     """
 
     def __init__(
@@ -87,12 +84,8 @@ class JudgeWorker:
         reply: Reply = queue.Queue(maxsize=1)
         try:
             self.channel.put((None, reply), timeout=self._timeout)
-        except queue.Full:
-            logger.error("Judge worker did not stop in time")
-            return
-        try:
             _ = reply.get(timeout=self._timeout)
-        except queue.Empty:
+        except (queue.Full, queue.Empty):
             logger.error("Judge worker did not stop in time")
             return
         self._thread.join(timeout=5)
@@ -112,7 +105,9 @@ class JudgeWorker:
     def get_row(self, row_id: int) -> EntityWithId:
         return self._call(lambda: self._row(row_id))
 
-    def replace_entities(self, entities: list[Entity], headers: list[str]) -> list[str]:
+    def replace_entities(
+        self, entities: list[Entity], headers: list[str]
+    ) -> list[str]:
         return self._call(lambda: self._replace_entities(entities, headers))
 
     def resume(self) -> bool:
@@ -152,37 +147,38 @@ class JudgeWorker:
 
     def _run(self) -> None:
         try:
-            try:
-                self._bootstrap()
-            except Exception as exc:
-                self._bootstrap_error = exc
-                logger.exception("Judge worker failed to recover")
-                self._ready.set()
-                # A database that cannot be read cannot be served. Exiting
-                # drops nothing that committed and lets the container restart.
-                os._exit(1)
+            self._bootstrap()
+        except Exception as exc:
+            self._bootstrap_error = exc
+            logger.exception("Judge worker failed to recover")
             self._ready.set()
-
-            while True:
-                job, reply = self.channel.get()
-                if job is None:
-                    reply.put(None)
-                    return
-                self._busy_since = time.monotonic()
-                try:
-                    reply.put(job())
-                except Exception as exc:
-                    if not isinstance(exc, JudgingFailure):
-                        logger.exception("Judge worker command failed")
-                    reply.put(exc)
-                except BaseException:
-                    reply.put(WorkerUnavailableException())
-                    raise
-                finally:
-                    self._busy_since = None
+            # Nothing committed is lost. The restart loads the last snapshot.
+            os._exit(1)
+        self._ready.set()
+        try:
+            self._serve()
         finally:
             self._fail_pending()
             close_db()
+
+    def _serve(self) -> None:
+        while True:
+            job, reply = self.channel.get()
+            if job is None:
+                reply.put(None)
+                return
+            self._busy_since = time.monotonic()
+            try:
+                reply.put(job())
+            except Exception as exc:
+                if not isinstance(exc, JudgingFailure):
+                    logger.exception("Judge worker command failed")
+                reply.put(exc)
+            except BaseException:
+                reply.put(WorkerUnavailableException())
+                raise
+            finally:
+                self._busy_since = None
 
     def _fail_pending(self) -> None:
         while True:
@@ -201,9 +197,9 @@ class JudgeWorker:
     ) -> list[str]:
         if len(entities) < 2:
             raise TooFewEntitiesException()
+        if self.enabled and entities == self._entities and headers == self.headers:
+            return list(self.headers)
         if self.enabled:
-            if entities == self._entities and list(headers) == list(self.headers):
-                return list(self.headers)
             raise JudgingAlreadyStartedException()
         bdp = BayesianDecisionProcess.create(len(entities))
         self._install(replace_state(headers, entities, bdp))

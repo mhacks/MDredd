@@ -17,7 +17,7 @@ router = APIRouter(
     status_code=status.HTTP_201_CREATED,
     description=(
         "Replace the stored dataset from a CSV upload and start judging. "
-        "A repeat of the stored dataset while judging is on is accepted."
+        "Repeating that dataset is accepted."
     ),
     response_description="The stored headers and that judging is on.",
     dependencies=[limited("admin")],
@@ -43,7 +43,7 @@ def get_judging(session: SessionDep) -> JudgingModel:
     response_model=JudgingModel,
     description=(
         "Turn judging on for the stored dataset. "
-        "An attempt while judging is on succeeds."
+        "A request while judging is on succeeds."
     ),
     response_description="Judging is on.",
     dependencies=[limited("admin")],
@@ -54,7 +54,7 @@ def get_judging(session: SessionDep) -> JudgingModel:
     response_model=JudgingModel,
     description=(
         "Turn judging on for the stored dataset. "
-        "An attempt while judging is on succeeds."
+        "A request while judging is on succeeds."
     ),
     response_description="Judging is on.",
     dependencies=[limited("admin")],
@@ -69,7 +69,7 @@ def resume_judging(session: SessionDep) -> JudgingModel:
     response_model=JudgingModel,
     description=(
         "Stop issuing pairs and accepting comparisons. "
-        "An attempt while judging is off succeeds."
+        "A request while judging is off succeeds."
     ),
     response_description="Judging is off.",
     dependencies=[limited("admin")],
