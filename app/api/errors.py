@@ -1,18 +1,29 @@
-from fastapi import Request
+from fastapi import Request, status
 from fastapi.responses import JSONResponse
 
-from app.exceptions import InvalidColumnsException, JudgingFailure
+from app.exceptions import (
+    IncorrectPairFormatException,
+    InvalidColumnsException,
+    JudgeDoesNotOwnPairException,
+    JudgingAlreadyStartedException,
+    JudgingFailure,
+    JudgingNeverStartedException,
+    JudgingNotStartedException,
+    TooFewEntitiesException,
+    UnknownRowException,
+    WorkerUnavailableException,
+)
 
-_STATUS = {
-    "JUDGING_NOT_STARTED": 409,
-    "JUDGING_ALREADY_STARTED": 409,
-    "JUDGING_NEVER_STARTED": 409,
-    "JUDGE_DOES_NOT_OWN_PAIR": 409,
-    "INCORRECT_PAIR_FORMAT": 422,
-    "TOO_FEW_ENTITIES": 422,
-    "UNKNOWN_ROW": 404,
-    "INVALID_COLUMNS": 422,
-    "WORKER_UNAVAILABLE": 503,
+_STATUS: dict[type[JudgingFailure], int] = {
+    JudgingNotStartedException: status.HTTP_409_CONFLICT,
+    JudgingAlreadyStartedException: status.HTTP_409_CONFLICT,
+    JudgingNeverStartedException: status.HTTP_409_CONFLICT,
+    JudgeDoesNotOwnPairException: status.HTTP_409_CONFLICT,
+    IncorrectPairFormatException: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    TooFewEntitiesException: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    InvalidColumnsException: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    UnknownRowException: status.HTTP_404_NOT_FOUND,
+    WorkerUnavailableException: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 
@@ -21,6 +32,6 @@ def judging_failure_handler(_request: Request, exc: JudgingFailure) -> JSONRespo
     if isinstance(exc, InvalidColumnsException):
         detail["names"] = exc.names
     return JSONResponse(
-        status_code=_STATUS.get(exc.code, 500),
+        status_code=_STATUS.get(type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR),
         content={"detail": detail},
     )

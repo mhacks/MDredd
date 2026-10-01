@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from app.api import admin_router, dev_router, judge_router
 from app.api.errors import judging_failure_handler
 from app.exceptions import JudgingFailure
-from app.logging import AccessLogMiddleware, RequestIdMiddleware, configure_logging
+from app.logging import RequestIdMiddleware, configure_logging
 from app.session import Session
 from app.settings import settings
 
@@ -47,7 +47,6 @@ def create_app() -> FastAPI:
     application.include_router(judge_router)
     if settings.ENABLE_CRASH_ROUTE:
         application.include_router(dev_router)
-    application.add_middleware(AccessLogMiddleware)
     application.add_middleware(RequestIdMiddleware)
     application.add_middleware(
         CORSMiddleware,

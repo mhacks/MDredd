@@ -27,8 +27,8 @@ class Entity(BaseModel):
         if [str(column) for column in frame.columns] != headers:
             raise InvalidColumnsException(headers)
         entities = [
-            Entity(attributes={header: str(row[header]) for header in headers})
-            for _, row in frame.iterrows()
+            Entity(attributes=dict(zip(headers, map(str, row), strict=True)))
+            for row in frame.itertuples(index=False, name=None)
         ]
         return headers, entities
 

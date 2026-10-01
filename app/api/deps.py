@@ -2,11 +2,11 @@ import logging
 import math
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.auth import AuthError, authenticate, bearer
-from app.ratelimit import limiter
+from app.ratelimit import Operation, limiter
 from app.session import Session
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,11 @@ async def require_session(
         authenticate(credentials)
     except AuthError as exc:
         logger.warning("Rejected request", extra={"reason": exc.reason})
-        raise HTTPException(status_code=401, detail={"code": exc.reason}) from exc
-    session = getattr(request.state, "session", None)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": exc.reason},
+        ) from exc
+    session = request.state.session
     if not isinstance(session, Session):
         raise TypeError("Judging session is missing")
     return session
@@ -30,14 +33,14 @@ async def require_session(
 SessionDep = Annotated[Session, Depends(require_session)]
 
 
-def limited(operation: str) -> Depends:
+def limited(operation: Operation) -> Depends:
     def consume(request: Request, _session: SessionDep) -> None:
         decision = limiter.try_consume(operation)
         request.state.rate_limit_remaining = decision.remaining
         if decision.allowed:
             return
         raise HTTPException(
-            status_code=429,
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
                 "code": "RATE_LIMITED",
                 "retry_after_ms": decision.retry_after_ms,

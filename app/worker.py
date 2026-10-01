@@ -108,11 +108,11 @@ class JudgeWorker:
     def replace_entities(self, entities: list[Entity], headers: list[str]) -> None:
         self._call(lambda: self._replace_entities(entities, headers))
 
-    def resume(self) -> None:
-        self._call(lambda: self._set_enabled(True))
+    def resume(self) -> bool:
+        return self._call(lambda: self._set_enabled(True))
 
-    def stop(self) -> None:
-        self._call(lambda: self._set_enabled(False))
+    def stop(self) -> bool:
+        return self._call(lambda: self._set_enabled(False))
 
     def request_pair(
         self, pair_request: PairRequestModel
@@ -197,7 +197,7 @@ class JudgeWorker:
         bdp = BayesianDecisionProcess.create(len(entities))
         self._install(replace_state(headers, entities, bdp))
 
-    def _set_enabled(self, enabled: bool) -> None:
+    def _set_enabled(self, enabled: bool) -> bool:
         if enabled:
             if self.enabled:
                 raise JudgingAlreadyStartedException()
@@ -207,6 +207,7 @@ class JudgeWorker:
             raise JudgingNotStartedException()
         self.enabled = enabled
         self._commit()
+        return enabled
 
     def _get_pair(
         self, pair_request: PairRequestModel

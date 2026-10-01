@@ -1,6 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from app.api.deps import SessionDep, limited
+from app.api.deps import SessionDep, limited, require_session
 from app.models import (
     ComparisonInputModel,
     ComparisonResultModel,
@@ -9,7 +9,7 @@ from app.models import (
     RowModel,
 )
 
-router = APIRouter(tags=["judge"])
+router = APIRouter(tags=["judge"], dependencies=[Depends(require_session)])
 
 
 @router.post("/pairs", response_model=PairModel, dependencies=[limited("pair")])
