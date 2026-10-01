@@ -15,7 +15,10 @@ router = APIRouter(
     "/datasets",
     response_model=DatasetModel,
     status_code=status.HTTP_201_CREATED,
-    description="Replace the stored dataset from a CSV upload and start judging.",
+    description=(
+        "Replace the stored dataset from a CSV upload and start judging. "
+        "A repeat of the stored dataset while judging is on is accepted."
+    ),
     response_description="The stored headers and that judging is on.",
     dependencies=[limited("admin")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
@@ -38,7 +41,10 @@ def get_judging(session: SessionDep) -> JudgingModel:
 @router.post(
     "/judging/start",
     response_model=JudgingModel,
-    description="Turn judging on for the dataset already stored.",
+    description=(
+        "Turn judging on for the stored dataset. "
+        "An attempt while judging is on succeeds."
+    ),
     response_description="Judging is on.",
     dependencies=[limited("admin")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
@@ -46,7 +52,10 @@ def get_judging(session: SessionDep) -> JudgingModel:
 @router.post(
     "/judging/resume",
     response_model=JudgingModel,
-    description="Turn judging on for the dataset already stored.",
+    description=(
+        "Turn judging on for the stored dataset. "
+        "An attempt while judging is on succeeds."
+    ),
     response_description="Judging is on.",
     dependencies=[limited("admin")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
@@ -58,10 +67,13 @@ def resume_judging(session: SessionDep) -> JudgingModel:
 @router.post(
     "/judging/stop",
     response_model=JudgingModel,
-    description="Stop issuing pairs and accepting comparisons.",
+    description=(
+        "Stop issuing pairs and accepting comparisons. "
+        "An attempt while judging is off succeeds."
+    ),
     response_description="Judging is off.",
     dependencies=[limited("admin")],
-    responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
+    responses=error_responses(limited=True),
 )
 def stop_judging(session: SessionDep) -> JudgingModel:
     return JudgingModel(is_started=session.worker.stop())

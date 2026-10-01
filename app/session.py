@@ -33,8 +33,7 @@ class Session:
 
     def start(self, entity_csv: bytes) -> list[str]:
         headers, entities = Entity.list_from_csv(entity_csv)
-        self.worker.replace_entities(entities, headers)
-        return headers
+        return self.worker.replace_entities(entities, headers)
 
     def _watch(self) -> None:
         while not self._closed.wait(settings.WATCHDOG_INTERVAL_SECONDS):
