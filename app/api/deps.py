@@ -34,7 +34,7 @@ SessionDep = Annotated[Session, Depends(require_session)]
 
 
 def limited(operation: Operation) -> Depends:
-    def consume(request: Request, _session: SessionDep) -> None:
+    async def consume(request: Request, _session: SessionDep) -> None:
         decision = limiter.try_consume(operation)
         request.state.rate_limit_remaining = decision.remaining
         if decision.allowed:
