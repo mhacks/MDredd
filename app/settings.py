@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     WORKER_STUCK_SECONDS: float = 30
     WORKER_QUEUE_SIZE: int = 8
     WATCHDOG_INTERVAL_SECONDS: float = 5
+    STRIKE_LIMIT: int = 3
 
     @field_validator("API_TOKEN")
     @classmethod

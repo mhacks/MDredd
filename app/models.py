@@ -15,7 +15,14 @@ class ComparisonInputModel(BaseModel):
 
 class PairRequestModel(BaseModel):
     judge_id: str = Field(min_length=1)
-    force: bool = False
+    absent: list[int] = Field(default_factory=list, max_length=2)
+
+
+class PoolEntryModel(BaseModel):
+    id: int
+    attributes: dict[str, str]
+    strikes: int
+    removed: bool
 
 
 class RowModel(BaseModel):

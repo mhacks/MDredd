@@ -82,10 +82,27 @@ class JudgeState(Model):
 class EntityState(Model):
     entity_id = IntegerField(primary_key=True)
     frequency = IntegerField()
+    strikes = IntegerField(default=0)
 
     class Meta:
         database = db
         table_name = "entity_state"
+
+
+class LastSkip(Model):
+    judge_id = TextField(primary_key=True)
+    absent_ids = JSONField()
+    entity_id_1 = IntegerField(null=True)
+    entity_id_2 = IntegerField(null=True)
+
+    class Meta:
+        database = db
+        table_name = "last_skips"
+
+
+# Absent project ids, and the pair produced by that report. A missing pair
+# means the report committed and the next draw did not.
+AbsentSkip = tuple[tuple[int, ...], tuple[int, int] | None]
 
 
 @dataclass
@@ -95,6 +112,8 @@ class JudgeRecord:
     entities: list[Entity]
     assignments: dict[str, tuple[int, int]]
     completed: dict[str, tuple[int, int, int]]
+    strikes: list[int]
+    last_skips: dict[str, AbsentSkip]
     bdp: BayesianDecisionProcess | None
 
 
@@ -102,8 +121,17 @@ def open_db() -> None:
     if db.is_closed():
         db.connect()
     db.create_tables(
-        [Judge, EntityRow, Assignment, CompletedComparison, JudgeState, EntityState]
+        [
+            Judge,
+            EntityRow,
+            Assignment,
+            CompletedComparison,
+            JudgeState,
+            EntityState,
+            LastSkip,
+        ]
     )
+    _migrate_strikes()
     _migrate_legacy_state()
 
 
@@ -127,6 +155,8 @@ def load_state() -> JudgeRecord:
             row.judge_id: (row.entity_id_1, row.entity_id_2, row.winner_id)
             for row in CompletedComparison.select()
         }
+        strikes = _load_strikes(len(entities))
+        last_skips = _load_last_skips()
         judge = Judge.get_or_none(Judge.id == 1)
         if judge is None:
             return JudgeRecord(
@@ -135,6 +165,8 @@ def load_state() -> JudgeRecord:
                 entities=entities,
                 assignments=assignments,
                 completed=completed,
+                strikes=strikes,
+                last_skips=last_skips,
                 bdp=None,
             )
         model = _load_model(len(entities))
@@ -144,6 +176,8 @@ def load_state() -> JudgeRecord:
             entities=entities,
             assignments=assignments,
             completed=completed,
+            strikes=strikes,
+            last_skips=last_skips,
             bdp=model,
         )
 
@@ -157,6 +191,8 @@ def replace_state(
         entities=list(entities),
         assignments={},
         completed={},
+        strikes=[0] * len(entities),
+        last_skips={},
         bdp=bdp,
     )
     with db.atomic():
@@ -164,6 +200,7 @@ def replace_state(
         EntityState.delete().execute()
         Assignment.delete().execute()
         CompletedComparison.delete().execute()
+        LastSkip.delete().execute()
         if record.entities:
             EntityRow.insert_many(
                 [
@@ -174,7 +211,11 @@ def replace_state(
             frequency = np.asarray(bdp.frequency)
             EntityState.insert_many(
                 [
-                    {"entity_id": index, "frequency": int(frequency[index])}
+                    {
+                        "entity_id": index,
+                        "frequency": int(frequency[index]),
+                        "strikes": 0,
+                    }
                     for index in range(len(record.entities))
                 ]
             ).execute()
@@ -246,6 +287,76 @@ def save_comparison(
         ).execute()
 
 
+def save_strikes(entity_id: int, strikes: int) -> None:
+    updated = (
+        EntityState.update(strikes=strikes)
+        .where(EntityState.entity_id == entity_id)
+        .execute()
+    )
+    if updated != 1:
+        raise RuntimeError("Entity state is missing")
+
+
+def save_pool_mutation(
+    frequency: Any,
+    strikes: list[int],
+    key: Any,
+    alpha: Any | None,
+    assignments: dict[str, tuple[int, int] | None],
+    completed: tuple[str, tuple[int, int, int]] | None,
+    last_skip: tuple[str, tuple[int, ...], tuple[int, int] | None] | None,
+) -> None:
+    stored_frequency = np.asarray(frequency)
+    if stored_frequency.shape != (len(strikes),):
+        raise RuntimeError("Frequency and strikes do not match")
+    with db.atomic():
+        for index, strike_count in enumerate(strikes):
+            updated = (
+                EntityState.update(
+                    frequency=int(stored_frequency[index]),
+                    strikes=int(strike_count),
+                )
+                .where(EntityState.entity_id == index)
+                .execute()
+            )
+            if updated != 1:
+                raise RuntimeError("Entity state is missing")
+        state: dict[str, bytes] = {"key": _array_bytes(key, np.dtype("<u4"))}
+        if alpha is not None:
+            state["alpha"] = _array_bytes(alpha, np.dtype("<f4"))
+        updated = (
+            JudgeState.update(state).where(JudgeState.id == 1).execute()
+        )
+        if updated != 1:
+            raise RuntimeError("Judge state is missing")
+        for judge_id, pair in assignments.items():
+            if pair is None:
+                Assignment.delete().where(Assignment.judge_id == judge_id).execute()
+                continue
+            left, right = pair
+            Assignment.replace(
+                judge_id=judge_id,
+                entity_id_1=left,
+                entity_id_2=right,
+            ).execute()
+        if completed is not None:
+            judge_id, (entity_id_1, entity_id_2, winner_id) = completed
+            CompletedComparison.replace(
+                judge_id=judge_id,
+                entity_id_1=entity_id_1,
+                entity_id_2=entity_id_2,
+                winner_id=winner_id,
+            ).execute()
+        if last_skip is not None:
+            judge_id, absent_ids, pair = last_skip
+            LastSkip.replace(
+                judge_id=judge_id,
+                absent_ids=list(absent_ids),
+                entity_id_1=None if pair is None else pair[0],
+                entity_id_2=None if pair is None else pair[1],
+            ).execute()
+
+
 def save_enabled(enabled: bool) -> None:
     updated = Judge.update(enabled=enabled).where(Judge.id == 1).execute()
     if updated != 1:
@@ -282,6 +393,49 @@ def _load_model(entity_count: int) -> BayesianDecisionProcess | None:
     )
 
 
+def _load_strikes(entity_count: int) -> list[int]:
+    rows = cast(
+        list[tuple[int, int]],
+        list(
+            EntityState.select(EntityState.entity_id, EntityState.strikes)
+            .order_by(EntityState.entity_id)
+            .tuples()
+        ),
+    )
+    if entity_count == 0:
+        if rows:
+            raise RuntimeError("Entity state does not match the entity table")
+        return []
+    if len(rows) != entity_count or any(
+        entity_id != index for index, (entity_id, _strikes) in enumerate(rows)
+    ):
+        raise RuntimeError("Entity state does not match the entity table")
+    return [count for _entity_id, count in rows]
+
+
+def _load_last_skips() -> dict[str, AbsentSkip]:
+    loaded: dict[str, AbsentSkip] = {}
+    for row in LastSkip.select():
+        absent = tuple(sorted(int(entity_id) for entity_id in row.absent_ids))
+        pair = None
+        if row.entity_id_1 is not None and row.entity_id_2 is not None:
+            pair = (int(row.entity_id_1), int(row.entity_id_2))
+        loaded[str(row.judge_id)] = (absent, pair)
+    return loaded
+
+
+def _migrate_strikes() -> None:
+    # create_tables does not add columns to a table that already exists.
+    if "entity_state" not in db.get_tables():
+        return
+    names = {column.name for column in db.get_columns("entity_state")}
+    if "strikes" in names:
+        return
+    db.execute_sql(
+        "ALTER TABLE entity_state ADD COLUMN strikes INTEGER NOT NULL DEFAULT 0"
+    )
+
+
 def _migrate_legacy_state() -> None:
     judge = Judge.get_or_none(Judge.id == 1)
     if judge is None or judge.bdp is None:
@@ -298,7 +452,11 @@ def _migrate_legacy_state() -> None:
         if frequencies.size:
             EntityState.insert_many(
                 [
-                    {"entity_id": index, "frequency": int(frequency)}
+                    {
+                        "entity_id": index,
+                        "frequency": int(frequency),
+                        "strikes": 0,
+                    }
                     for index, frequency in enumerate(frequencies)
                 ]
             ).execute()

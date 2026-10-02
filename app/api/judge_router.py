@@ -20,7 +20,11 @@ router = APIRouter(
 @router.post(
     "/pairs",
     response_model=PairModel,
-    description="Draw this judge's open pair, or return the pair they already hold.",
+    description=(
+        "Draw this judge's open pair, or return the pair they already hold. "
+        "One absent project from that pair forfeits, and the other project wins. "
+        "Both absent strikes each project and draws a new pair."
+    ),
     response_description="The two rows to compare.",
     dependencies=[limited("pair")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),

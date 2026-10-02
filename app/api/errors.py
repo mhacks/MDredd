@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.exceptions import (
+    AbsentNotInPairException,
     IncorrectPairFormatException,
     InvalidColumnsException,
     JudgeDoesNotOwnPairException,
@@ -10,6 +11,7 @@ from app.exceptions import (
     JudgingFailure,
     JudgingNeverStartedException,
     JudgingNotStartedException,
+    PoolExhaustedException,
     TooFewEntitiesException,
     UnknownRowException,
     WorkerUnavailableException,
@@ -24,6 +26,8 @@ _STATUS: dict[type[JudgingFailure], int] = {
     TooFewEntitiesException: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvalidColumnsException: status.HTTP_422_UNPROCESSABLE_CONTENT,
     UnknownRowException: status.HTTP_404_NOT_FOUND,
+    AbsentNotInPairException: status.HTTP_409_CONFLICT,
+    PoolExhaustedException: status.HTTP_409_CONFLICT,
     WorkerUnavailableException: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 

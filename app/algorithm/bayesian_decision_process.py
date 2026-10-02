@@ -30,13 +30,21 @@ def _logsumexp_excluding_each(logits: jnp.ndarray) -> jnp.ndarray:
     return jnp.logaddexp(before, after)
 
 
-def _pair_sampling_logits(
-    frequency: jnp.ndarray, temperature: float
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _entity_logits(
+    frequency: jnp.ndarray, temperature: float, active: jnp.ndarray
+) -> jnp.ndarray:
     # Shifting by the minimum keeps the distribution and keeps float32 logits
-    # near zero as frequencies grow.
+    # near zero as frequencies grow. Inactive entities are removed before the
+    # log-sum-exp so they contribute no weight and cannot be drawn.
     shifted = frequency - jnp.min(frequency)
-    entity_logits = -shifted.astype(jnp.float32) / temperature
+    logits = -shifted.astype(jnp.float32) / temperature
+    return jnp.where(active, logits, jnp.asarray(-jnp.inf, dtype=logits.dtype))
+
+
+def _pair_sampling_logits(
+    frequency: jnp.ndarray, temperature: float, active: jnp.ndarray
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    entity_logits = _entity_logits(frequency, temperature, active)
     # A pair's weight factorizes as exp(logit[i]) * exp(logit[j]). The first
     # draw includes the combined weight of every valid partner; the second is
     # then sampled conditionally with the first entity excluded.
@@ -46,10 +54,15 @@ def _pair_sampling_logits(
 
 @jit
 def _draw_next_pair(
-    frequency: jnp.ndarray, key: jnp.ndarray, temperature: float
+    frequency: jnp.ndarray,
+    key: jnp.ndarray,
+    temperature: float,
+    active: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Draw the same distribution as enumerating every unordered pair."""
-    entity_logits, first_logits = _pair_sampling_logits(frequency, temperature)
+    """Draw the same distribution as enumerating every unordered active pair."""
+    entity_logits, first_logits = _pair_sampling_logits(
+        frequency, temperature, active
+    )
     next_key, first_key, second_key = jr.split(key, 3)
 
     first = jr.categorical(first_key, first_logits)
@@ -60,6 +73,23 @@ def _draw_next_pair(
     right = jnp.maximum(first, second)
     frequency = frequency.at[left].add(1).at[right].add(1)
     return frequency, next_key, left, right
+
+
+@jit
+def _draw_partner(
+    frequency: jnp.ndarray,
+    key: jnp.ndarray,
+    temperature: float,
+    keep: int,
+    active: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Draw one active partner. Only the partner's frequency increases."""
+    logits = _entity_logits(frequency, temperature, active)
+    logits = logits.at[keep].set(jnp.asarray(-jnp.inf, dtype=logits.dtype))
+    next_key, draw_key = jr.split(key, 2)
+    partner = jr.categorical(draw_key, logits)
+    frequency = frequency.at[partner].add(1)
+    return frequency, next_key, partner
 
 
 class BayesianDecisionProcess(BaseModel):
@@ -130,16 +160,53 @@ class BayesianDecisionProcess(BaseModel):
         return BayesianDecisionProcess.MM(self.alpha_t, i, j, outcome)
 
     def propose_pair(
-        self, temp: float = 1.0
+        self,
+        active: np.ndarray,
+        temp: float = 1.0,
+        *,
+        frequency: jnp.ndarray | None = None,
+        key: jnp.ndarray | None = None,
     ) -> tuple[int, int, jnp.ndarray, jnp.ndarray]:
-        if self.K < 2:
-            raise ValueError("At least two entities are required to draw a pair")
         if not temp > 0:
             raise ValueError("Pair sampling temperature must be positive")
+        active_array = np.asarray(active, dtype=bool)
+        if active_array.shape != (self.K,):
+            raise ValueError("Active mask must contain K values")
+        if self.K < 2 or int(active_array.sum()) < 2:
+            raise ValueError("At least two entities are required to draw a pair")
+        if frequency is None:
+            frequency = self.frequency
+        if key is None:
+            key = self.key
         frequency, key, next_i, next_j = _draw_next_pair(
-            self.frequency, self.key, temp
+            frequency, key, temp, jnp.asarray(active_array)
         )
         return int(next_i), int(next_j), frequency, key
+
+    def propose_partner(
+        self,
+        keep: int,
+        active: np.ndarray,
+        temp: float = 1.0,
+        *,
+        frequency: jnp.ndarray | None = None,
+        key: jnp.ndarray | None = None,
+    ) -> tuple[int, jnp.ndarray, jnp.ndarray]:
+        if not temp > 0:
+            raise ValueError("Pair sampling temperature must be positive")
+        active_array = np.asarray(active, dtype=bool)
+        if active_array.shape != (self.K,):
+            raise ValueError("Active mask must contain K values")
+        if int(active_array.sum()) < 1:
+            raise ValueError("At least one partner is required")
+        if frequency is None:
+            frequency = self.frequency
+        if key is None:
+            key = self.key
+        frequency, key, partner = _draw_partner(
+            frequency, key, temp, keep, jnp.asarray(active_array)
+        )
+        return int(partner), frequency, key
 
     @staticmethod
     @jit
