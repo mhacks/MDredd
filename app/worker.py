@@ -260,7 +260,7 @@ class JudgeWorker:
         self._unreadable = False
         if destination is None:
             return None
-        return str(destination)
+        return destination.name
 
     def _replace_entities(
         self, entities: list[Entity], headers: list[str]

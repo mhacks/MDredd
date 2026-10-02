@@ -151,8 +151,15 @@ def archive_db() -> Path | None:
     # Move the file aside. create_tables will not alter a table that already
     # exists, so a schema change has to start from an empty file.
     close_db()
+    try:
+        return _archive_closed_db()
+    finally:
+        if db.is_closed():
+            open_db()
+
+
+def _archive_closed_db() -> Path | None:
     if settings.DB_FILE == ":memory:":
-        open_db()
         return None
     db_path = Path(settings.DB_FILE)
     candidates = [
@@ -169,12 +176,35 @@ def archive_db() -> Path | None:
     destination.mkdir(parents=True)
     logger.info("Archiving database to %s", destination)
     detach_log_file()
-    for path in existing:
-        path.rename(destination / path.name)
+    try:
+        _move_together(existing, destination)
+    except Exception:
+        attach_log_file()
+        if not any(destination.iterdir()):
+            destination.rmdir()
+        raise
     attach_log_file()
     open_db()
     logger.info("Archived database to %s", destination)
     return destination
+
+
+def _move_together(sources: list[Path], destination: Path) -> None:
+    # A rename is atomic for one file. If a later file fails, put the earlier
+    # ones back so the database and its WAL are never split.
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source in sources:
+            target = destination / source.name
+            source.rename(target)
+            moved.append((target, source))
+    except Exception:
+        for target, source in reversed(moved):
+            try:
+                target.rename(source)
+            except Exception:
+                logger.exception("Could not move %s back to %s", target, source)
+        raise
 
 
 def archive_root() -> Path:
@@ -191,19 +221,11 @@ def list_archives() -> list[str]:
 
 
 def list_archive_files(name: str) -> list[Path]:
-    directory = _archive_folder(name)
-    return sorted(path for path in directory.iterdir() if path.is_file())
-
-
-def _archive_folder(name: str) -> Path:
-    folder = Path(name)
     root = archive_root()
     path = (root / name).resolve()
-    if folder.name != name or name in {"", ".", ".."} or path.parent != root.resolve():
+    if path.parent != root.resolve() or not path.is_dir():
         raise UnknownArchiveException()
-    if not path.is_dir():
-        raise UnknownArchiveException()
-    return path
+    return sorted(file for file in path.iterdir() if file.is_file())
 
 
 def _archive_directory(root: Path) -> Path:
