@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.settings import settings
+
 FIELD_DTYPES = {
     "alpha_t": jnp.float32,
     "frequency": jnp.int32,
@@ -52,8 +54,19 @@ def _pair_sampling_logits(
     return entity_logits, first_logits
 
 
+def _commit_pair(
+    frequency: jnp.ndarray,
+    key: jnp.ndarray,
+    i: jnp.ndarray,
+    j: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    left = jnp.minimum(i, j)
+    right = jnp.maximum(i, j)
+    return frequency.at[left].add(1).at[right].add(1), key, left, right
+
+
 @jit
-def _draw_next_pair(
+def _draw_active_pair(
     frequency: jnp.ndarray,
     key: jnp.ndarray,
     temperature: float,
@@ -68,11 +81,49 @@ def _draw_next_pair(
     first = jr.categorical(first_key, first_logits)
     second_logits = entity_logits.at[first].set(-jnp.inf)
     second = jr.categorical(second_key, second_logits)
+    return _commit_pair(frequency, next_key, first, second)
 
-    left = jnp.minimum(first, second)
-    right = jnp.maximum(first, second)
-    frequency = frequency.at[left].add(1).at[right].add(1)
-    return frequency, next_key, left, right
+
+@jit
+def _draw_forced_pair(
+    frequency: jnp.ndarray,
+    key: jnp.ndarray,
+    temperature: float,
+    active: jnp.ndarray,
+    forced: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Pair one required project with a partner drawn by inverse frequency."""
+    entity_logits = _entity_logits(frequency, temperature, active)
+    next_key, partner_key = jr.split(key, 2)
+    partner_logits = entity_logits.at[forced].set(-jnp.inf)
+    partner = jr.categorical(partner_key, partner_logits)
+    return _commit_pair(frequency, next_key, forced, partner)
+
+
+def _draw_next_pair(
+    frequency: jnp.ndarray,
+    key: jnp.ndarray,
+    temperature: float,
+    active: jnp.ndarray,
+    min_judgments: int,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Fill each active project up to min_judgments, then sample as usual.
+
+    A count of zero disables the floor. Removed projects stay out because they
+    are already missing from ``active``.
+    """
+    active_mask = np.asarray(active, dtype=bool)
+    under = active_mask & (np.asarray(frequency) < min_judgments)
+    short = int(under.sum())
+    if short == 1:
+        forced = jnp.int32(int(np.flatnonzero(under)[0]))
+        return _draw_forced_pair(
+            frequency, key, temperature, jnp.asarray(active_mask), forced
+        )
+    # Two or more short: draw only among them. None short: draw among every
+    # project still active.
+    mask = under if short >= 2 else active_mask
+    return _draw_active_pair(frequency, key, temperature, jnp.asarray(mask))
 
 
 class BayesianDecisionProcess(BaseModel):
@@ -149,6 +200,7 @@ class BayesianDecisionProcess(BaseModel):
         *,
         frequency: jnp.ndarray | None = None,
         key: jnp.ndarray | None = None,
+        min_judgments: int | None = None,
     ) -> tuple[int, int, jnp.ndarray, jnp.ndarray]:
         if self.K < 2:
             raise ValueError("At least two entities are required to draw a pair")
@@ -163,8 +215,14 @@ class BayesianDecisionProcess(BaseModel):
             frequency = self.frequency
         if key is None:
             key = self.key
+        if min_judgments is None:
+            min_judgments = settings.MIN_JUDGMENTS
         frequency, key, next_i, next_j = _draw_next_pair(
-            frequency, key, temp, jnp.asarray(active_array)
+            frequency,
+            key,
+            temp,
+            jnp.asarray(active_array),
+            min_judgments,
         )
         return int(next_i), int(next_j), frequency, key
 
