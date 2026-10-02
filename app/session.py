@@ -35,6 +35,9 @@ class Session:
         headers, entities = Entity.list_from_csv(entity_csv)
         return self.worker.replace_entities(entities, headers)
 
+    def reset(self) -> None:
+        self.worker.reset()
+
     def _watch(self) -> None:
         while not self._closed.wait(settings.WATCHDOG_INTERVAL_SECONDS):
             if not self.worker.healthy():

@@ -8,6 +8,7 @@ from typing import cast
 
 import jax.numpy as jnp
 import numpy as np
+from peewee import DatabaseError
 
 from app.algorithm import BayesianDecisionProcess
 from app.db import (
@@ -17,6 +18,7 @@ from app.db import (
     load_state,
     open_db,
     replace_state,
+    reset_db,
     save_absence,
     save_assignment,
     save_comparison,
@@ -168,6 +170,9 @@ class JudgeWorker:
     def restore(self, entity_id: int) -> PoolEntryModel:
         return self._call(lambda: self._restore(entity_id))
 
+    def reset(self) -> None:
+        self._call(self._reset)
+
     def _call[T](self, fn: Callable[[], T]) -> T:
         if not self.healthy():
             raise WorkerUnavailableException()
@@ -230,8 +235,24 @@ class JudgeWorker:
             reply.put(None if job is None else WorkerUnavailableException())
 
     def _bootstrap(self) -> None:
+        try:
+            self._load()
+        except DatabaseError:
+            # The file is from another schema. Delete it and start empty so a
+            # deploy does not stay crash-looping on the old volume.
+            logger.exception("SQLite database could not be loaded; deleting it")
+            self._load_fresh()
+
+    def _load(self) -> None:
         open_db()
         self._install(load_state())
+
+    def _load_fresh(self) -> None:
+        reset_db()
+        self._install(load_state())
+
+    def _reset(self) -> None:
+        self._load_fresh()
 
     def _replace_entities(
         self, entities: list[Entity], headers: list[str]

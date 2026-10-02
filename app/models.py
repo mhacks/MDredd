@@ -43,6 +43,10 @@ class DatasetModel(BaseModel):
     headers: list[str]
 
 
+class DatabaseModel(BaseModel):
+    deleted: bool
+
+
 class ColumnsModel(BaseModel):
     headers: list[str]
 

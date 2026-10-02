@@ -51,6 +51,7 @@ Errors are JSON: `{"detail":{"code":"..."}}`. Rate limits add `retry_after_ms` a
 3. `POST /judging/stop` rejects new pairs and comparisons and keeps the dataset, open pairs, strikes, and rankings. `POST /judging/start` and `POST /judging/resume` are the same call: turn judging back on. Repeating the call that matches the current state succeeds. `GET /judging` returns `{ "is_started": true }` or `false`.
 4. `GET /pool` lists every project in upload order: `id`, `attributes`, `strikes`, and `removed`. `removed` is true once `strikes` reaches the strike limit. `POST /pool/{id}/restore` clears that project's strikes and returns it to the draw. Restoring a project that is still active succeeds and changes nothing.
 5. `GET /rankings` returns every row, strongest first. The response is ids and attributes only. Rankings stay readable after stop. Before any dataset exists they are `409` `JUDGING_NEVER_STARTED`. `GET /columns` lists headers. `GET /rows/{id}` returns one row, or `404` `UNKNOWN_ROW`.
+6. `DELETE /database` removes the SQLite file and starts empty. The response is `{ "deleted": true }` and judging is off. If a new version cannot read the file, startup deletes it and continues empty.
 
 ## Judge flow
 

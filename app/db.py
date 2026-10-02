@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -138,6 +139,17 @@ def open_db() -> None:
 def close_db() -> None:
     if not db.is_closed():
         db.close()
+
+
+def reset_db() -> None:
+    # Drop the file, not just the rows. create_tables will not alter a table
+    # that already exists, so a schema change has to start from an empty file.
+    close_db()
+    if settings.DB_FILE != ":memory:":
+        path = Path(settings.DB_FILE)
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            path.with_name(path.name + suffix).unlink(missing_ok=True)
+    open_db()
 
 
 def load_state() -> JudgeRecord:

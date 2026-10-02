@@ -4,6 +4,7 @@ from app.api.deps import SessionDep, limited, require_session
 from app.api.errors import error_responses
 from app.models import (
     ColumnsModel,
+    DatabaseModel,
     DatasetModel,
     JudgingModel,
     PoolEntryModel,
@@ -83,6 +84,23 @@ def resume_judging(session: SessionDep) -> JudgingModel:
 )
 def stop_judging(session: SessionDep) -> JudgingModel:
     return JudgingModel(is_started=session.worker.stop())
+
+
+@router.delete(
+    "/database",
+    response_model=DatabaseModel,
+    description=(
+        "Delete the SQLite database and start empty. "
+        "Judging is off afterward. "
+        "Startup does the same when it cannot read the file."
+    ),
+    response_description="The database file was deleted.",
+    dependencies=[limited("admin")],
+    responses=error_responses(limited=True),
+)
+def delete_database(session: SessionDep) -> DatabaseModel:
+    session.reset()
+    return DatabaseModel(deleted=True)
 
 
 @router.get(
