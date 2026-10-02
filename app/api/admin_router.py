@@ -100,7 +100,7 @@ def stop_judging(session: SessionDep) -> JudgingModel:
     responses=error_responses(limited=True),
 )
 def delete_database(session: SessionDep) -> DatabaseModel:
-    session.reset()
+    session.worker.reset()
     return DatabaseModel(deleted=True)
 
 

@@ -74,6 +74,7 @@ def _refund(frequency: jnp.ndarray, entity_id: int) -> jnp.ndarray:
 
 Job = Callable[[], object] | None
 Reply = queue.Queue[object]
+Command = tuple[Job, Reply, bool]
 
 
 class JudgeWorker:
@@ -92,7 +93,7 @@ class JudgeWorker:
         stuck_after: float = settings.WORKER_STUCK_SECONDS,
         queue_size: int = settings.WORKER_QUEUE_SIZE,
     ) -> None:
-        self.channel: queue.Queue[tuple[Job, Reply]] = queue.Queue(maxsize=queue_size)
+        self.channel: queue.Queue[Command] = queue.Queue(maxsize=queue_size)
         self._timeout = timeout
         self._stuck_after = stuck_after
         self._busy_since: float | None = None
@@ -122,7 +123,7 @@ class JudgeWorker:
             return
         reply: Reply = queue.Queue(maxsize=1)
         try:
-            self.channel.put((None, reply), timeout=self._timeout)
+            self.channel.put((None, reply, True), timeout=self._timeout)
             _ = reply.get(timeout=self._timeout)
         except (queue.Full, queue.Empty):
             logger.error("Judge worker did not stop in time")
@@ -173,14 +174,14 @@ class JudgeWorker:
         return self._call(lambda: self._restore(entity_id))
 
     def reset(self) -> None:
-        self._call(self._reset)
+        self._call(self._reset, when_unreadable=True)
 
-    def _call[T](self, fn: Callable[[], T]) -> T:
+    def _call[T](self, fn: Callable[[], T], *, when_unreadable: bool = False) -> T:
         if not self.healthy():
             raise WorkerUnavailableException()
         reply: Reply = queue.Queue(maxsize=1)
         try:
-            self.channel.put_nowait((fn, reply))
+            self.channel.put_nowait((fn, reply, when_unreadable))
         except queue.Full:
             logger.error("Judge worker queue is full")
             raise WorkerUnavailableException() from None
@@ -211,14 +212,11 @@ class JudgeWorker:
 
     def _serve(self) -> None:
         while True:
-            job, reply = self.channel.get()
+            job, reply, when_unreadable = self.channel.get()
             if job is None:
                 reply.put(None)
                 return
-            # A bound method is a new object on each access, so compare the
-            # underlying function. Reset is the one command allowed through.
-            resetting = getattr(job, "__func__", None) is type(self)._reset
-            if self._unreadable and not resetting:
+            if self._unreadable and not when_unreadable:
                 reply.put(DatabaseUnreadableException())
                 continue
             self._busy_since = time.monotonic()
@@ -237,14 +235,15 @@ class JudgeWorker:
     def _fail_pending(self) -> None:
         while True:
             try:
-                job, reply = self.channel.get_nowait()
+                job, reply, _when_unreadable = self.channel.get_nowait()
             except queue.Empty:
                 return
             reply.put(None if job is None else WorkerUnavailableException())
 
     def _bootstrap(self) -> None:
         try:
-            self._load()
+            open_db()
+            self._install(load_state())
         except DatabaseError:
             # Leave the file in place. The process keeps serving so an
             # organizer can call DELETE /database.
@@ -255,16 +254,9 @@ class JudgeWorker:
                 "DELETE /database to remove it and start empty."
             )
 
-    def _load(self) -> None:
-        open_db()
-        self._install(load_state())
-
-    def _load_fresh(self) -> None:
+    def _reset(self) -> None:
         reset_db()
         self._install(load_state())
-
-    def _reset(self) -> None:
-        self._load_fresh()
         self._unreadable = False
 
     def _replace_entities(
