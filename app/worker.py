@@ -14,11 +14,11 @@ from app.algorithm import BayesianDecisionProcess
 from app.db import (
     AbsentSkip,
     JudgeRecord,
+    archive_db,
     close_db,
     load_state,
     open_db,
     replace_state,
-    reset_db,
     save_absence,
     save_assignment,
     save_comparison,
@@ -173,8 +173,8 @@ class JudgeWorker:
     def restore(self, entity_id: int) -> PoolEntryModel:
         return self._call(lambda: self._restore(entity_id))
 
-    def reset(self) -> None:
-        self._call(self._reset, when_unreadable=True)
+    def archive(self) -> str | None:
+        return self._call(self._archive, when_unreadable=True)
 
     def _call[T](self, fn: Callable[[], T], *, when_unreadable: bool = False) -> T:
         if not self.healthy():
@@ -246,18 +246,21 @@ class JudgeWorker:
             self._install(load_state())
         except DatabaseError:
             # Leave the file in place. The process keeps serving so an
-            # organizer can call DELETE /database.
+            # organizer can call POST /archive.
             close_db()
             self._unreadable = True
             logger.critical(
                 "SQLite database could not be loaded. "
-                "DELETE /database to remove it and start empty."
+                "POST /archive to move it aside and start empty."
             )
 
-    def _reset(self) -> None:
-        reset_db()
+    def _archive(self) -> str | None:
+        destination = archive_db()
         self._install(load_state())
         self._unreadable = False
+        if destination is None:
+            return None
+        return str(destination)
 
     def _replace_entities(
         self, entities: list[Entity], headers: list[str]

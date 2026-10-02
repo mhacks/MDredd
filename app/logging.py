@@ -1,17 +1,23 @@
 import json
 import logging
+import threading
 import time
 import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from pathlib import Path
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from app.settings import settings
 
 request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 logger = logging.getLogger(__name__)
 
 _HANDLER_NAME = "mdredd-json"
+_FILE_HANDLER_NAME = "mdredd-file"
+_file_lock = threading.Lock()
 
 _FIELDS = (
     "operation",
@@ -46,6 +52,16 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload)
 
 
+class _FlushingFileHandler(logging.FileHandler):
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
+def log_path() -> Path:
+    return Path(settings.DB_FILE).with_suffix(".log")
+
+
 def configure_logging() -> None:
     root = logging.getLogger()
     if not any(handler.name == _HANDLER_NAME for handler in root.handlers):
@@ -53,11 +69,38 @@ def configure_logging() -> None:
         handler.set_name(_HANDLER_NAME)
         handler.setFormatter(JsonFormatter())
         root.addHandler(handler)
+    attach_log_file()
     root.setLevel(logging.INFO)
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logger = logging.getLogger(name)
         logger.handlers.clear()
         logger.propagate = True
+
+
+def attach_log_file() -> None:
+    if settings.DB_FILE == ":memory:":
+        return
+    path = log_path()
+    with _file_lock:
+        root = logging.getLogger()
+        if any(handler.name == _FILE_HANDLER_NAME for handler in root.handlers):
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = _FlushingFileHandler(path)
+        handler.set_name(_FILE_HANDLER_NAME)
+        handler.setFormatter(JsonFormatter())
+        root.addHandler(handler)
+
+
+def detach_log_file() -> None:
+    with _file_lock:
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            if handler.name != _FILE_HANDLER_NAME:
+                continue
+            root.removeHandler(handler)
+            handler.flush()
+            handler.close()
 
 
 class RequestIdMiddleware:

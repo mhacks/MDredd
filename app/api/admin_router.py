@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, UploadFile, status
 from app.api.deps import SessionDep, limited, require_session
 from app.api.errors import error_responses
 from app.models import (
+    ArchiveModel,
     ColumnsModel,
-    DatabaseModel,
     DatasetModel,
     JudgingModel,
     PoolEntryModel,
@@ -86,22 +86,21 @@ def stop_judging(session: SessionDep) -> JudgingModel:
     return JudgingModel(is_started=session.worker.stop())
 
 
-@router.delete(
-    "/database",
-    response_model=DatabaseModel,
+@router.post(
+    "/archive",
+    response_model=ArchiveModel,
     description=(
-        "Delete the SQLite database and start empty. "
-        "Judging is off afterward. "
+        "Move the SQLite database and the log file into a new archive folder "
+        "and start empty. Earlier archives are kept. Judging is off afterward. "
         "If startup cannot read the file, it logs that and keeps serving "
         "until this route is called."
     ),
-    response_description="The database file was deleted.",
+    response_description="The folder that holds the archived database and log.",
     dependencies=[limited("admin")],
     responses=error_responses(limited=True),
 )
-def delete_database(session: SessionDep) -> DatabaseModel:
-    session.worker.reset()
-    return DatabaseModel(deleted=True)
+def archive_database(session: SessionDep) -> ArchiveModel:
+    return ArchiveModel(path=session.worker.archive())
 
 
 @router.get(

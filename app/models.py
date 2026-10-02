@@ -43,8 +43,8 @@ class DatasetModel(BaseModel):
     headers: list[str]
 
 
-class DatabaseModel(BaseModel):
-    deleted: bool
+class ArchiveModel(BaseModel):
+    path: str | None
 
 
 class ColumnsModel(BaseModel):

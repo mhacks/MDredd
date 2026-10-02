@@ -1,4 +1,6 @@
+import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,7 +18,10 @@ from peewee import (
 
 from app.algorithm import BayesianDecisionProcess
 from app.entity import Entity
+from app.logging import attach_log_file, detach_log_file, log_path
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # FULL fsyncs each commit. A lock waits one second, then the worker fails the command.
 db = SqliteDatabase(
@@ -141,15 +146,44 @@ def close_db() -> None:
         db.close()
 
 
-def reset_db() -> None:
-    # Drop the file, not just the rows. create_tables will not alter a table
-    # that already exists, so a schema change has to start from an empty file.
+def archive_db() -> Path | None:
+    # Move the file aside. create_tables will not alter a table that already
+    # exists, so a schema change has to start from an empty file.
     close_db()
-    if settings.DB_FILE != ":memory:":
-        path = Path(settings.DB_FILE)
-        for suffix in ("", "-wal", "-shm", "-journal"):
-            path.with_name(path.name + suffix).unlink(missing_ok=True)
+    if settings.DB_FILE == ":memory:":
+        open_db()
+        return None
+    db_path = Path(settings.DB_FILE)
+    candidates = [
+        db_path.with_name(db_path.name + suffix)
+        for suffix in ("", "-wal", "-shm", "-journal")
+    ]
+    candidates.append(log_path())
+    existing = [path for path in candidates if path.is_file()]
+    if not existing:
+        attach_log_file()
+        open_db()
+        return None
+    destination = _archive_directory(db_path.parent / "archive")
+    destination.mkdir(parents=True)
+    logger.info("Archiving database to %s", destination)
+    detach_log_file()
+    for path in existing:
+        path.rename(destination / path.name)
+    attach_log_file()
     open_db()
+    logger.info("Archived database to %s", destination)
+    return destination
+
+
+def _archive_directory(root: Path) -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    candidate = root / stamp
+    suffix = 2
+    while candidate.exists():
+        candidate = root / f"{stamp}-{suffix}"
+        suffix += 1
+    return candidate
 
 
 def load_state() -> JudgeRecord:
