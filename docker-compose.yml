@@ -17,6 +17,7 @@ services:
       MDREDD_DB_FILE: /app/data/mdredd.db
       MDREDD_API_TOKEN: ${MDREDD_API_TOKEN:?MDREDD_API_TOKEN must be set}
       MDREDD_CORS_ORIGINS: ${MDREDD_CORS_ORIGINS:-["http://localhost:8000"]}
+      MDREDD_STRIKE_LIMIT: ${MDREDD_STRIKE_LIMIT:-3}
     volumes:
       # A named volume starts out owned by the image's unprivileged user.
       - mdredd-data:/app/data

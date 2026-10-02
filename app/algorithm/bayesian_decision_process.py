@@ -75,23 +75,6 @@ def _draw_next_pair(
     return frequency, next_key, left, right
 
 
-@jit
-def _draw_partner(
-    frequency: jnp.ndarray,
-    key: jnp.ndarray,
-    temperature: float,
-    keep: int,
-    active: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Draw one active partner. Only the partner's frequency increases."""
-    logits = _entity_logits(frequency, temperature, active)
-    logits = logits.at[keep].set(jnp.asarray(-jnp.inf, dtype=logits.dtype))
-    next_key, draw_key = jr.split(key, 2)
-    partner = jr.categorical(draw_key, logits)
-    frequency = frequency.at[partner].add(1)
-    return frequency, next_key, partner
-
-
 class BayesianDecisionProcess(BaseModel):
     K: int
     alpha_t: jnp.ndarray
@@ -167,12 +150,14 @@ class BayesianDecisionProcess(BaseModel):
         frequency: jnp.ndarray | None = None,
         key: jnp.ndarray | None = None,
     ) -> tuple[int, int, jnp.ndarray, jnp.ndarray]:
+        if self.K < 2:
+            raise ValueError("At least two entities are required to draw a pair")
         if not temp > 0:
             raise ValueError("Pair sampling temperature must be positive")
         active_array = np.asarray(active, dtype=bool)
         if active_array.shape != (self.K,):
             raise ValueError("Active mask must contain K values")
-        if self.K < 2 or int(active_array.sum()) < 2:
+        if int(active_array.sum()) < 2:
             raise ValueError("At least two entities are required to draw a pair")
         if frequency is None:
             frequency = self.frequency
@@ -182,31 +167,6 @@ class BayesianDecisionProcess(BaseModel):
             frequency, key, temp, jnp.asarray(active_array)
         )
         return int(next_i), int(next_j), frequency, key
-
-    def propose_partner(
-        self,
-        keep: int,
-        active: np.ndarray,
-        temp: float = 1.0,
-        *,
-        frequency: jnp.ndarray | None = None,
-        key: jnp.ndarray | None = None,
-    ) -> tuple[int, jnp.ndarray, jnp.ndarray]:
-        if not temp > 0:
-            raise ValueError("Pair sampling temperature must be positive")
-        active_array = np.asarray(active, dtype=bool)
-        if active_array.shape != (self.K,):
-            raise ValueError("Active mask must contain K values")
-        if int(active_array.sum()) < 1:
-            raise ValueError("At least one partner is required")
-        if frequency is None:
-            frequency = self.frequency
-        if key is None:
-            key = self.key
-        frequency, key, partner = _draw_partner(
-            frequency, key, temp, keep, jnp.asarray(active_array)
-        )
-        return int(partner), frequency, key
 
     @staticmethod
     @jit

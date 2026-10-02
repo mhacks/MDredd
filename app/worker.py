@@ -17,10 +17,10 @@ from app.db import (
     load_state,
     open_db,
     replace_state,
+    save_absence,
     save_assignment,
     save_comparison,
     save_enabled,
-    save_pool_mutation,
     save_strikes,
 )
 from app.entity import Entity
@@ -48,21 +48,6 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def _log_judging(
-    message: str,
-    event: str,
-    entity_ids: list[int],
-    user_id: str | None = None,
-    winner_id: int | None = None,
-) -> None:
-    extra: dict[str, object] = {"event": event, "entity_ids": entity_ids}
-    if user_id is not None:
-        extra["user_id"] = user_id
-    if winner_id is not None:
-        extra["winner_id"] = winner_id
-    logger.info(message, extra=extra)
-
-
 def _active_mask(strikes: list[int], exclude: tuple[int, ...] = ()) -> np.ndarray:
     limit = settings.STRIKE_LIMIT
     mask = np.array([count < limit for count in strikes], dtype=bool)
@@ -71,9 +56,18 @@ def _active_mask(strikes: list[int], exclude: tuple[int, ...] = ()) -> np.ndarra
     return mask
 
 
+def _streak(count: int, appeared: bool) -> int:
+    if count >= settings.STRIKE_LIMIT:
+        return count
+    if appeared:
+        return 0
+    return count + 1
+
+
 def _refund(frequency: jnp.ndarray, entity_id: int) -> jnp.ndarray:
     refunded = jnp.maximum(frequency[entity_id] - jnp.int32(1), jnp.int32(0))
     return frequency.at[entity_id].set(refunded.astype(frequency.dtype))
+
 
 Job = Callable[[], object] | None
 Reply = queue.Queue[object]
@@ -310,8 +304,14 @@ class JudgeWorker:
         bdp = self._require_bdp()
         alpha = bdp.propose_comparison(entity_id_1, entity_id_2, winner_id)
         completed = (*submitted, winner_id)
-        save_comparison(alpha, judge, completed)
+        strike_counts = [
+            (entity_id, _streak(self._strikes[entity_id], True))
+            for entity_id in submitted
+        ]
+        save_comparison(alpha, judge, completed, (strike_counts[0], strike_counts[1]))
         bdp.alpha_t = alpha
+        for entity_id, strike_count in strike_counts:
+            self._strikes[entity_id] = strike_count
         del self._assignments[judge]
         self._completed[judge] = completed
         logger.info(
@@ -339,14 +339,16 @@ class JudgeWorker:
         if absent_key is None:
             save_assignment(frequency, key, judge_id, pair)
         else:
-            save_pool_mutation(
+            save_absence(
                 frequency,
                 self._strikes,
                 key,
                 None,
                 {judge_id: pair},
                 None,
-                (judge_id, absent_key, pair),
+                judge_id,
+                absent_key,
+                pair,
             )
         bdp.frequency = frequency
         bdp.key = key
@@ -364,11 +366,13 @@ class JudgeWorker:
         if last is not None and last[0] == absent_key:
             stored = last[1]
             if stored is not None and current == stored:
-                _log_judging(
+                logger.info(
                     "Ignored repeated strike",
-                    "strike_repeated",
-                    list(absent_key),
-                    user_id=judge_id,
+                    extra={
+                        "event": "strike_repeated",
+                        "user_id": judge_id,
+                        "entity_ids": list(absent_key),
+                    },
                 )
                 return self._pair(*stored)
             if stored is None and current is None:
@@ -379,11 +383,13 @@ class JudgeWorker:
             or current is None
             or not set(absent_key).issubset(current)
         ):
-            _log_judging(
+            logger.info(
                 "Rejected strike",
-                "strike_rejected",
-                list(absent),
-                user_id=judge_id,
+                extra={
+                    "event": "strike_rejected",
+                    "user_id": judge_id,
+                    "entity_ids": list(absent),
+                },
             )
             raise AbsentNotInPairException()
 
@@ -391,17 +397,22 @@ class JudgeWorker:
         frequency = bdp.frequency
         key = bdp.key
         strikes = list(self._strikes)
+        struck: list[int] = []
         for entity_id in absent_key:
-            strikes[entity_id] += 1
+            count = _streak(strikes[entity_id], False)
+            if count != strikes[entity_id]:
+                struck.append(entity_id)
+            strikes[entity_id] = count
         alpha = None
-        winner_id: int | None = None
-        ordered: tuple[int, int] | None = None
+        winner_id = None
+        ordered = None
         if len(absent_key) == 1:
             missing = absent_key[0]
             present = current[0] if current[1] == missing else current[1]
             alpha = bdp.propose_comparison(current[0], current[1], present)
             winner_id = present
             ordered = (min(current), max(current))
+            strikes[present] = _streak(strikes[present], True)
         else:
             for entity_id in absent_key:
                 frequency = _refund(frequency, entity_id)
@@ -413,47 +424,9 @@ class JudgeWorker:
             if strikes[entity_id] >= limit and self._strikes[entity_id] < limit
         ]
         assignment_updates: dict[str, tuple[int, int] | None] = {}
-        repaired: list[tuple[str, tuple[int, int]]] = []
-        cleared: list[tuple[str, tuple[int, int]]] = []
-        for other in sorted(self._assignments):
-            if other == judge_id:
-                continue
-            pair = self._assignments[other]
-            if not any(entity_id in removed for entity_id in pair):
-                continue
-            for entity_id in pair:
-                if entity_id in removed:
-                    frequency = _refund(frequency, entity_id)
-            kept = [entity_id for entity_id in pair if entity_id not in removed]
-            if len(kept) == 1:
-                keep = kept[0]
-                mask = _active_mask(strikes, (keep,))
-                if int(mask.sum()) < 1:
-                    assignment_updates[other] = None
-                    cleared.append((other, pair))
-                    continue
-                partner, frequency, key = bdp.propose_partner(
-                    keep, mask, frequency=frequency, key=key
-                )
-                replacement = (min(keep, partner), max(keep, partner))
-                assignment_updates[other] = replacement
-                repaired.append((other, replacement))
-                continue
-            mask = _active_mask(strikes)
-            if int(mask.sum()) < 2:
-                assignment_updates[other] = None
-                cleared.append((other, pair))
-                continue
-            left, right, frequency, key = bdp.propose_pair(
-                mask, frequency=frequency, key=key
-            )
-            replacement = (left, right)
-            assignment_updates[other] = replacement
-            repaired.append((other, replacement))
-
         exclude = absent_key if len(absent_key) == 2 else ()
         mask = _active_mask(strikes, exclude)
-        new_pair: tuple[int, int] | None = None
+        new_pair = None
         if int(mask.sum()) < 2:
             assignment_updates[judge_id] = None
         else:
@@ -466,14 +439,16 @@ class JudgeWorker:
         completed = None
         if ordered is not None and winner_id is not None:
             completed = (judge_id, (*ordered, winner_id))
-        save_pool_mutation(
+        save_absence(
             frequency,
             strikes,
             key,
             alpha,
             assignment_updates,
             completed,
-            (judge_id, absent_key, new_pair),
+            judge_id,
+            absent_key,
+            new_pair,
         )
         bdp.frequency = frequency
         bdp.key = key
@@ -488,83 +463,63 @@ class JudgeWorker:
         if completed is not None:
             self._completed[judge_id] = completed[1]
         self._last_skips[judge_id] = (absent_key, new_pair)
-        self._log_absence(
-            judge_id, absent_key, ordered, winner_id, removed, repaired, cleared
-        )
+        if ordered is not None and winner_id is not None:
+            logger.info(
+                "Applied comparison",
+                extra={
+                    "event": "comparison",
+                    "user_id": judge_id,
+                    "entity_ids": [ordered[0], ordered[1]],
+                    "winner_id": winner_id,
+                },
+            )
+        for entity_id in struck:
+            logger.info(
+                "Applied strike",
+                extra={
+                    "event": "strike",
+                    "user_id": judge_id,
+                    "entity_ids": [entity_id],
+                },
+            )
+        for entity_id in removed:
+            logger.info(
+                "Removed project",
+                extra={
+                    "event": "project_removed",
+                    "user_id": judge_id,
+                    "entity_ids": [entity_id],
+                },
+            )
         if new_pair is None:
             raise PoolExhaustedException()
         return self._pair(*new_pair)
-
-    def _log_absence(
-        self,
-        judge_id: str,
-        absent_key: tuple[int, ...],
-        ordered: tuple[int, int] | None,
-        winner_id: int | None,
-        removed: list[int],
-        repaired: list[tuple[str, tuple[int, int]]],
-        cleared: list[tuple[str, tuple[int, int]]],
-    ) -> None:
-        if ordered is not None and winner_id is not None:
-            _log_judging(
-                "Applied comparison",
-                "comparison",
-                [ordered[0], ordered[1]],
-                user_id=judge_id,
-                winner_id=winner_id,
-            )
-        for entity_id in absent_key:
-            _log_judging(
-                "Applied strike",
-                "strike",
-                [entity_id],
-                user_id=judge_id,
-            )
-        for entity_id in removed:
-            _log_judging(
-                "Removed project",
-                "project_removed",
-                [entity_id],
-                user_id=judge_id,
-            )
-        for other, pair in repaired:
-            _log_judging(
-                "Applied pair",
-                "pair",
-                [pair[0], pair[1]],
-                user_id=other,
-            )
-        for other, pair in cleared:
-            _log_judging(
-                "Rejected pair",
-                "pair_rejected",
-                [pair[0], pair[1]],
-                user_id=other,
-            )
 
     def _pool(self) -> list[PoolEntryModel]:
         return [self._pool_entry(index) for index in range(len(self._entities))]
 
     def _restore(self, entity_id: int) -> PoolEntryModel:
-        if entity_id < 0 or entity_id >= len(self._entities):
-            raise UnknownRowException()
-        if self._strikes[entity_id] < settings.STRIKE_LIMIT:
-            _log_judging(
+        entry = self._pool_entry(entity_id)
+        if not entry.removed:
+            logger.info(
                 "Ignored repeated restore",
-                "restore_repeated",
-                [entity_id],
+                extra={"event": "restore_repeated", "entity_ids": [entity_id]},
             )
-            return self._pool_entry(entity_id)
+            return entry
         save_strikes(entity_id, 0)
         self._strikes[entity_id] = 0
-        _log_judging("Applied restore", "restore", [entity_id])
+        logger.info(
+            "Applied restore",
+            extra={"event": "restore", "entity_ids": [entity_id]},
+        )
         return self._pool_entry(entity_id)
 
     def _pool_entry(self, entity_id: int) -> PoolEntryModel:
-        count = self._strikes[entity_id]
+        row = self._row(entity_id)
+        count = self._strikes[row.id]
         return PoolEntryModel(
-            id=entity_id,
-            attributes=dict(self._entities[entity_id].attributes),
+            id=row.id,
+            attributes=dict(row.attributes),
             strikes=count,
             removed=count >= settings.STRIKE_LIMIT,
         )

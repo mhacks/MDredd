@@ -155,7 +155,7 @@ def load_state() -> JudgeRecord:
             row.judge_id: (row.entity_id_1, row.entity_id_2, row.winner_id)
             for row in CompletedComparison.select()
         }
-        strikes = _load_strikes(len(entities))
+        frequencies, strikes = _load_entity_state(len(entities))
         last_skips = _load_last_skips()
         judge = Judge.get_or_none(Judge.id == 1)
         if judge is None:
@@ -169,7 +169,7 @@ def load_state() -> JudgeRecord:
                 last_skips=last_skips,
                 bdp=None,
             )
-        model = _load_model(len(entities))
+        model = _load_model(len(entities), frequencies)
         return JudgeRecord(
             enabled=bool(judge.enabled) and model is not None,
             headers=list(judge.headers),
@@ -267,7 +267,10 @@ def save_assignment(
 
 
 def save_comparison(
-    alpha: Any, judge_id: str, completed: tuple[int, int, int]
+    alpha: Any,
+    judge_id: str,
+    completed: tuple[int, int, int],
+    strikes: tuple[tuple[int, int], tuple[int, int]],
 ) -> None:
     entity_id_1, entity_id_2, winner_id = completed
     with db.atomic():
@@ -278,6 +281,14 @@ def save_comparison(
         )
         if updated != 1:
             raise RuntimeError("Judge state is missing")
+        for entity_id, strike_count in strikes:
+            updated = (
+                EntityState.update(strikes=strike_count)
+                .where(EntityState.entity_id == entity_id)
+                .execute()
+            )
+            if updated != 1:
+                raise RuntimeError("Entity state is missing")
         Assignment.delete().where(Assignment.judge_id == judge_id).execute()
         CompletedComparison.replace(
             judge_id=judge_id,
@@ -297,14 +308,16 @@ def save_strikes(entity_id: int, strikes: int) -> None:
         raise RuntimeError("Entity state is missing")
 
 
-def save_pool_mutation(
+def save_absence(
     frequency: Any,
     strikes: list[int],
     key: Any,
     alpha: Any | None,
     assignments: dict[str, tuple[int, int] | None],
     completed: tuple[str, tuple[int, int, int]] | None,
-    last_skip: tuple[str, tuple[int, ...], tuple[int, int] | None] | None,
+    judge_id: str,
+    absent_ids: tuple[int, ...],
+    pair: tuple[int, int] | None,
 ) -> None:
     stored_frequency = np.asarray(frequency)
     if stored_frequency.shape != (len(strikes),):
@@ -324,37 +337,35 @@ def save_pool_mutation(
         state: dict[str, bytes] = {"key": _array_bytes(key, np.dtype("<u4"))}
         if alpha is not None:
             state["alpha"] = _array_bytes(alpha, np.dtype("<f4"))
-        updated = (
-            JudgeState.update(state).where(JudgeState.id == 1).execute()
-        )
+        updated = JudgeState.update(state).where(JudgeState.id == 1).execute()
         if updated != 1:
             raise RuntimeError("Judge state is missing")
-        for judge_id, pair in assignments.items():
-            if pair is None:
-                Assignment.delete().where(Assignment.judge_id == judge_id).execute()
+        for assigned_judge, assigned_pair in assignments.items():
+            if assigned_pair is None:
+                Assignment.delete().where(
+                    Assignment.judge_id == assigned_judge
+                ).execute()
                 continue
-            left, right = pair
+            left, right = assigned_pair
             Assignment.replace(
-                judge_id=judge_id,
+                judge_id=assigned_judge,
                 entity_id_1=left,
                 entity_id_2=right,
             ).execute()
         if completed is not None:
-            judge_id, (entity_id_1, entity_id_2, winner_id) = completed
+            completed_judge, (entity_id_1, entity_id_2, winner_id) = completed
             CompletedComparison.replace(
-                judge_id=judge_id,
+                judge_id=completed_judge,
                 entity_id_1=entity_id_1,
                 entity_id_2=entity_id_2,
                 winner_id=winner_id,
             ).execute()
-        if last_skip is not None:
-            judge_id, absent_ids, pair = last_skip
-            LastSkip.replace(
-                judge_id=judge_id,
-                absent_ids=list(absent_ids),
-                entity_id_1=None if pair is None else pair[0],
-                entity_id_2=None if pair is None else pair[1],
-            ).execute()
+        LastSkip.replace(
+            judge_id=judge_id,
+            absent_ids=list(absent_ids),
+            entity_id_1=None if pair is None else pair[0],
+            entity_id_2=None if pair is None else pair[1],
+        ).execute()
 
 
 def save_enabled(enabled: bool) -> None:
@@ -363,54 +374,46 @@ def save_enabled(enabled: bool) -> None:
         raise RuntimeError("Judge row is missing")
 
 
-def _load_model(entity_count: int) -> BayesianDecisionProcess | None:
+def _load_model(
+    entity_count: int, frequencies: list[int]
+) -> BayesianDecisionProcess | None:
     state = JudgeState.get_or_none(JudgeState.id == 1)
     if state is None:
         return None
-
-    frequency_rows = cast(
-        list[tuple[int, int]],
-        list(
-            EntityState.select(EntityState.entity_id, EntityState.frequency)
-            .order_by(EntityState.entity_id)
-            .tuples()
-        ),
-    )
-    if len(frequency_rows) != entity_count or any(
-        entity_id != index
-        for index, (entity_id, _frequency) in enumerate(frequency_rows)
-    ):
-        raise RuntimeError("Entity state does not match the entity table")
     alpha = _array_from_bytes(state.alpha, np.dtype("<f4"), entity_count, "alpha")
     key = _array_from_bytes(state.key, np.dtype("<u4"), 2, "key")
     return BayesianDecisionProcess.model_validate(
         {
             "K": entity_count,
             "alpha_t": alpha,
-            "frequency": [frequency for _entity_id, frequency in frequency_rows],
+            "frequency": frequencies,
             "key": key,
         }
     )
 
 
-def _load_strikes(entity_count: int) -> list[int]:
+def _load_entity_state(entity_count: int) -> tuple[list[int], list[int]]:
     rows = cast(
-        list[tuple[int, int]],
+        list[tuple[int, int, int]],
         list(
-            EntityState.select(EntityState.entity_id, EntityState.strikes)
+            EntityState.select(
+                EntityState.entity_id,
+                EntityState.frequency,
+                EntityState.strikes,
+            )
             .order_by(EntityState.entity_id)
             .tuples()
         ),
     )
-    if entity_count == 0:
-        if rows:
-            raise RuntimeError("Entity state does not match the entity table")
-        return []
     if len(rows) != entity_count or any(
-        entity_id != index for index, (entity_id, _strikes) in enumerate(rows)
+        entity_id != index
+        for index, (entity_id, _frequency, _strikes) in enumerate(rows)
     ):
         raise RuntimeError("Entity state does not match the entity table")
-    return [count for _entity_id, count in rows]
+    return (
+        [frequency for _entity_id, frequency, _strikes in rows],
+        [strike_count for _entity_id, _frequency, strike_count in rows],
+    )
 
 
 def _load_last_skips() -> dict[str, AbsentSkip]:
