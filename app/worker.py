@@ -6,35 +6,68 @@ import time
 from collections.abc import Callable
 from typing import cast
 
+import jax.numpy as jnp
 import numpy as np
 
 from app.algorithm import BayesianDecisionProcess
 from app.db import (
+    AbsentSkip,
     JudgeRecord,
     close_db,
     load_state,
     open_db,
     replace_state,
+    save_absence,
     save_assignment,
     save_comparison,
     save_enabled,
+    save_strikes,
 )
 from app.entity import Entity
 from app.exceptions import (
+    AbsentNotInPairException,
     IncorrectPairFormatException,
     JudgeDoesNotOwnPairException,
     JudgingAlreadyStartedException,
     JudgingFailure,
     JudgingNeverStartedException,
     JudgingNotStartedException,
+    PoolExhaustedException,
     TooFewEntitiesException,
     UnknownRowException,
     WorkerUnavailableException,
 )
-from app.models import ComparisonInputModel, EntityWithId, PairRequestModel
+from app.models import (
+    ComparisonInputModel,
+    EntityWithId,
+    PairRequestModel,
+    PoolEntryModel,
+)
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _active_mask(strikes: list[int], exclude: tuple[int, ...] = ()) -> np.ndarray:
+    limit = settings.STRIKE_LIMIT
+    mask = np.array([count < limit for count in strikes], dtype=bool)
+    for entity_id in exclude:
+        mask[entity_id] = False
+    return mask
+
+
+def _streak(count: int, appeared: bool) -> int:
+    if count >= settings.STRIKE_LIMIT:
+        return count
+    if appeared:
+        return 0
+    return count + 1
+
+
+def _refund(frequency: jnp.ndarray, entity_id: int) -> jnp.ndarray:
+    refunded = jnp.maximum(frequency[entity_id] - jnp.int32(1), jnp.int32(0))
+    return frequency.at[entity_id].set(refunded.astype(frequency.dtype))
+
 
 Job = Callable[[], object] | None
 Reply = queue.Queue[object]
@@ -66,6 +99,8 @@ class JudgeWorker:
         self._entities: list[Entity] = []
         self._assignments: dict[str, tuple[int, int]] = {}
         self._completed: dict[str, tuple[int, int, int]] = {}
+        self._strikes: list[int] = []
+        self._last_skips: dict[str, AbsentSkip] = {}
         self._ready = threading.Event()
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
@@ -126,6 +161,12 @@ class JudgeWorker:
 
     def rankings(self) -> list[EntityWithId]:
         return self._call(self._rankings_snapshot)
+
+    def pool(self) -> list[PoolEntryModel]:
+        return self._call(self._pool)
+
+    def restore(self, entity_id: int) -> PoolEntryModel:
+        return self._call(lambda: self._restore(entity_id))
 
     def _call[T](self, fn: Callable[[], T]) -> T:
         if not self.healthy():
@@ -219,19 +260,12 @@ class JudgeWorker:
     ) -> tuple[EntityWithId, EntityWithId]:
         if not self.enabled:
             raise JudgingNotStartedException()
-        assigned = (
-            None if pair_request.force else self._assignments.get(pair_request.judge_id)
-        )
+        if pair_request.absent:
+            return self._report_absence(pair_request.judge_id, pair_request.absent)
+        assigned = self._assignments.get(pair_request.judge_id)
         if assigned is not None:
             return self._pair(*assigned)
-
-        bdp = self._require_bdp()
-        left, right, frequency, key = bdp.propose_pair()
-        save_assignment(frequency, key, pair_request.judge_id, (left, right))
-        bdp.frequency = frequency
-        bdp.key = key
-        self._assignments[pair_request.judge_id] = (left, right)
-        return self._pair(left, right)
+        return self._draw_for(pair_request.judge_id, ())
 
     def _submit(self, comparison: ComparisonInputModel) -> None:
         if not self.enabled:
@@ -270,8 +304,14 @@ class JudgeWorker:
         bdp = self._require_bdp()
         alpha = bdp.propose_comparison(entity_id_1, entity_id_2, winner_id)
         completed = (*submitted, winner_id)
-        save_comparison(alpha, judge, completed)
+        strike_counts = [
+            (entity_id, _streak(self._strikes[entity_id], True))
+            for entity_id in submitted
+        ]
+        save_comparison(alpha, judge, completed, (strike_counts[0], strike_counts[1]))
         bdp.alpha_t = alpha
+        for entity_id, strike_count in strike_counts:
+            self._strikes[entity_id] = strike_count
         del self._assignments[judge]
         self._completed[judge] = completed
         logger.info(
@@ -284,12 +324,214 @@ class JudgeWorker:
             },
         )
 
+    def _draw_for(
+        self,
+        judge_id: str,
+        exclude: tuple[int, ...],
+        absent_key: tuple[int, ...] | None = None,
+    ) -> tuple[EntityWithId, EntityWithId]:
+        mask = _active_mask(self._strikes, exclude)
+        if int(mask.sum()) < 2:
+            raise PoolExhaustedException()
+        bdp = self._require_bdp()
+        left, right, frequency, key = bdp.propose_pair(mask)
+        pair = (left, right)
+        if absent_key is None:
+            save_assignment(frequency, key, judge_id, pair)
+        else:
+            save_absence(
+                frequency,
+                self._strikes,
+                key,
+                None,
+                {judge_id: pair},
+                None,
+                judge_id,
+                absent_key,
+                pair,
+            )
+        bdp.frequency = frequency
+        bdp.key = key
+        self._assignments[judge_id] = pair
+        if absent_key is not None:
+            self._last_skips[judge_id] = (absent_key, pair)
+        return self._pair(*pair)
+
+    def _report_absence(
+        self, judge_id: str, absent: list[int]
+    ) -> tuple[EntityWithId, EntityWithId]:
+        absent_key = tuple(sorted(set(absent)))
+        current = self._assignments.get(judge_id)
+        last = self._last_skips.get(judge_id)
+        if last is not None and last[0] == absent_key:
+            stored = last[1]
+            if stored is not None and current == stored:
+                logger.info(
+                    "Ignored repeated strike",
+                    extra={
+                        "event": "strike_repeated",
+                        "user_id": judge_id,
+                        "entity_ids": list(absent_key),
+                    },
+                )
+                return self._pair(*stored)
+            if stored is None and current is None:
+                exclude = absent_key if len(absent_key) == 2 else ()
+                return self._draw_for(judge_id, exclude, absent_key)
+        if (
+            not absent_key
+            or current is None
+            or not set(absent_key).issubset(current)
+        ):
+            logger.info(
+                "Rejected strike",
+                extra={
+                    "event": "strike_rejected",
+                    "user_id": judge_id,
+                    "entity_ids": list(absent),
+                },
+            )
+            raise AbsentNotInPairException()
+
+        bdp = self._require_bdp()
+        frequency = bdp.frequency
+        key = bdp.key
+        strikes = list(self._strikes)
+        struck: list[int] = []
+        for entity_id in absent_key:
+            count = _streak(strikes[entity_id], False)
+            if count != strikes[entity_id]:
+                struck.append(entity_id)
+            strikes[entity_id] = count
+        alpha = None
+        winner_id = None
+        ordered = None
+        if len(absent_key) == 1:
+            missing = absent_key[0]
+            present = current[0] if current[1] == missing else current[1]
+            alpha = bdp.propose_comparison(current[0], current[1], present)
+            winner_id = present
+            ordered = (min(current), max(current))
+            strikes[present] = _streak(strikes[present], True)
+        else:
+            for entity_id in absent_key:
+                frequency = _refund(frequency, entity_id)
+
+        limit = settings.STRIKE_LIMIT
+        removed = [
+            entity_id
+            for entity_id in absent_key
+            if strikes[entity_id] >= limit and self._strikes[entity_id] < limit
+        ]
+        assignment_updates: dict[str, tuple[int, int] | None] = {}
+        exclude = absent_key if len(absent_key) == 2 else ()
+        mask = _active_mask(strikes, exclude)
+        new_pair = None
+        if int(mask.sum()) < 2:
+            assignment_updates[judge_id] = None
+        else:
+            left, right, frequency, key = bdp.propose_pair(
+                mask, frequency=frequency, key=key
+            )
+            new_pair = (left, right)
+            assignment_updates[judge_id] = new_pair
+
+        completed = None
+        if ordered is not None and winner_id is not None:
+            completed = (judge_id, (*ordered, winner_id))
+        save_absence(
+            frequency,
+            strikes,
+            key,
+            alpha,
+            assignment_updates,
+            completed,
+            judge_id,
+            absent_key,
+            new_pair,
+        )
+        bdp.frequency = frequency
+        bdp.key = key
+        if alpha is not None:
+            bdp.alpha_t = alpha
+        self._strikes = strikes
+        for other, pair in assignment_updates.items():
+            if pair is None:
+                self._assignments.pop(other, None)
+            else:
+                self._assignments[other] = pair
+        if completed is not None:
+            self._completed[judge_id] = completed[1]
+        self._last_skips[judge_id] = (absent_key, new_pair)
+        if ordered is not None and winner_id is not None:
+            logger.info(
+                "Applied comparison",
+                extra={
+                    "event": "comparison",
+                    "user_id": judge_id,
+                    "entity_ids": [ordered[0], ordered[1]],
+                    "winner_id": winner_id,
+                },
+            )
+        for entity_id in struck:
+            logger.info(
+                "Applied strike",
+                extra={
+                    "event": "strike",
+                    "user_id": judge_id,
+                    "entity_ids": [entity_id],
+                },
+            )
+        for entity_id in removed:
+            logger.info(
+                "Removed project",
+                extra={
+                    "event": "project_removed",
+                    "user_id": judge_id,
+                    "entity_ids": [entity_id],
+                },
+            )
+        if new_pair is None:
+            raise PoolExhaustedException()
+        return self._pair(*new_pair)
+
+    def _pool(self) -> list[PoolEntryModel]:
+        return [self._pool_entry(index) for index in range(len(self._entities))]
+
+    def _restore(self, entity_id: int) -> PoolEntryModel:
+        entry = self._pool_entry(entity_id)
+        if not entry.removed:
+            logger.info(
+                "Ignored repeated restore",
+                extra={"event": "restore_repeated", "entity_ids": [entity_id]},
+            )
+            return entry
+        save_strikes(entity_id, 0)
+        self._strikes[entity_id] = 0
+        logger.info(
+            "Applied restore",
+            extra={"event": "restore", "entity_ids": [entity_id]},
+        )
+        return self._pool_entry(entity_id)
+
+    def _pool_entry(self, entity_id: int) -> PoolEntryModel:
+        row = self._row(entity_id)
+        count = self._strikes[row.id]
+        return PoolEntryModel(
+            id=row.id,
+            attributes=dict(row.attributes),
+            strikes=count,
+            removed=count >= settings.STRIKE_LIMIT,
+        )
+
     def _install(self, record: JudgeRecord) -> None:
         self.enabled = record.enabled
         self.headers = list(record.headers)
         self._entities = list(record.entities)
         self._assignments = dict(record.assignments)
         self._completed = dict(record.completed)
+        self._strikes = list(record.strikes)
+        self._last_skips = dict(record.last_skips)
         self.bdp = record.bdp
 
     def _require_bdp(self) -> BayesianDecisionProcess:

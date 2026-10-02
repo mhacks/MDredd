@@ -36,6 +36,14 @@ class UnknownRowException(JudgingFailure):
     code: ClassVar[str] = "UNKNOWN_ROW"
 
 
+class AbsentNotInPairException(JudgingFailure):
+    code: ClassVar[str] = "ABSENT_NOT_IN_PAIR"
+
+
+class PoolExhaustedException(JudgingFailure):
+    code: ClassVar[str] = "POOL_EXHAUSTED"
+
+
 class WorkerUnavailableException(JudgingFailure):
     code: ClassVar[str] = "WORKER_UNAVAILABLE"
 

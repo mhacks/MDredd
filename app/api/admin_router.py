@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends, UploadFile, status
 
 from app.api.deps import SessionDep, limited, require_session
 from app.api.errors import error_responses
-from app.models import ColumnsModel, DatasetModel, JudgingModel, RowModel
+from app.models import (
+    ColumnsModel,
+    DatasetModel,
+    JudgingModel,
+    PoolEntryModel,
+    RowModel,
+)
 
 router = APIRouter(
     tags=["admin"],
@@ -109,3 +115,28 @@ def get_row(row_id: int, session: SessionDep) -> RowModel:
 )
 def get_rankings(session: SessionDep) -> list[RowModel]:
     return [RowModel.from_entity(entity) for entity in session.worker.rankings()]
+
+
+@router.get(
+    "/pool",
+    response_model=list[PoolEntryModel],
+    description="List every project with its strike count and whether it is removed.",
+    response_description="Projects in upload order.",
+)
+def get_pool(session: SessionDep) -> list[PoolEntryModel]:
+    return session.worker.pool()
+
+
+@router.post(
+    "/pool/{entity_id}/restore",
+    response_model=PoolEntryModel,
+    description=(
+        "Return a removed project to the pool by clearing its strikes. "
+        "A project that is not removed is left unchanged."
+    ),
+    response_description="The project and its strike count.",
+    dependencies=[limited("admin")],
+    responses=error_responses(status.HTTP_404_NOT_FOUND, limited=True),
+)
+def restore_pool_entity(entity_id: int, session: SessionDep) -> PoolEntryModel:
+    return session.worker.restore(entity_id)
