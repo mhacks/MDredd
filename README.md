@@ -51,6 +51,7 @@ Errors are JSON: `{"detail":{"code":"..."}}`. Rate limits add `retry_after_ms` a
 3. `POST /judging/stop` rejects new pairs and comparisons and keeps the dataset, open pairs, strikes, and rankings. `POST /judging/start` and `POST /judging/resume` are the same call: turn judging back on. Repeating the call that matches the current state succeeds. `GET /judging` returns `{ "is_started": true }` or `false`.
 4. `GET /pool` lists every project in upload order: `id`, `attributes`, `strikes`, and `removed`. `removed` is true once `strikes` reaches the strike limit. `POST /pool/{id}/restore` clears that project's strikes and returns it to the draw. Restoring a project that is still active succeeds and changes nothing.
 5. `GET /rankings` returns every row, strongest first. The response is ids and attributes only. Rankings stay readable after stop. Before any dataset exists they are `409` `JUDGING_NEVER_STARTED`. `GET /columns` lists headers. `GET /rows/{id}` returns one row, or `404` `UNKNOWN_ROW`.
+6. `POST /archive` moves the SQLite database and the log file into a new folder under `archive/` and starts empty. Each call keeps the earlier folders. The response `path` is that folder's name. `GET /archives` lists those names, newest first, and `GET /archives/{id}` downloads that folder as a zip. An unknown id is `404` `UNKNOWN_ARCHIVE`. Judging is off. If startup cannot read the file, it logs that and keeps serving. Other routes are `503` `DATABASE_UNREADABLE` until `POST /archive`.
 
 ## Judge flow
 
