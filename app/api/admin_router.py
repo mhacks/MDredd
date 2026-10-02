@@ -1,8 +1,14 @@
+import io
+import zipfile
+
 from fastapi import APIRouter, Depends, UploadFile, status
+from fastapi.responses import Response
 
 from app.api.deps import SessionDep, limited, require_session
 from app.api.errors import error_responses
+from app.db import list_archive_files, list_archives
 from app.models import (
+    ArchiveListModel,
     ArchiveModel,
     ColumnsModel,
     DatasetModel,
@@ -101,6 +107,35 @@ def stop_judging(session: SessionDep) -> JudgingModel:
 )
 def archive_database(session: SessionDep) -> ArchiveModel:
     return ArchiveModel(path=session.worker.archive())
+
+
+@router.get(
+    "/archives",
+    response_model=ArchiveListModel,
+    description="List archived databases, newest first.",
+    response_description="Archive folder names, newest first.",
+)
+def get_archives() -> ArchiveListModel:
+    return ArchiveListModel(archives=list_archives())
+
+
+@router.get(
+    "/archives/{archive_id}",
+    description="Download every file in one archive as a zip.",
+    response_description="A zip of the database, its sidecars, and the log.",
+    responses=error_responses(status.HTTP_404_NOT_FOUND),
+)
+def get_archive(archive_id: str) -> Response:
+    files = list_archive_files(archive_id)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            archive.write(path, arcname=path.name)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{archive_id}.zip"'},
+    )
 
 
 @router.get(

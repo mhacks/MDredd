@@ -18,6 +18,7 @@ from peewee import (
 
 from app.algorithm import BayesianDecisionProcess
 from app.entity import Entity
+from app.exceptions import UnknownArchiveException
 from app.logging import attach_log_file, detach_log_file, log_path
 from app.settings import settings
 
@@ -164,7 +165,7 @@ def archive_db() -> Path | None:
         attach_log_file()
         open_db()
         return None
-    destination = _archive_directory(db_path.parent / "archive")
+    destination = _archive_directory(archive_root())
     destination.mkdir(parents=True)
     logger.info("Archiving database to %s", destination)
     detach_log_file()
@@ -174,6 +175,35 @@ def archive_db() -> Path | None:
     open_db()
     logger.info("Archived database to %s", destination)
     return destination
+
+
+def archive_root() -> Path:
+    return Path(settings.DB_FILE).parent / "archive"
+
+
+def list_archives() -> list[str]:
+    root = archive_root()
+    if not root.is_dir():
+        return []
+    names = [path.name for path in root.iterdir() if path.is_dir()]
+    names.sort(reverse=True)
+    return names
+
+
+def list_archive_files(name: str) -> list[Path]:
+    directory = _archive_folder(name)
+    return sorted(path for path in directory.iterdir() if path.is_file())
+
+
+def _archive_folder(name: str) -> Path:
+    folder = Path(name)
+    root = archive_root()
+    path = (root / name).resolve()
+    if folder.name != name or name in {"", ".", ".."} or path.parent != root.resolve():
+        raise UnknownArchiveException()
+    if not path.is_dir():
+        raise UnknownArchiveException()
+    return path
 
 
 def _archive_directory(root: Path) -> Path:
