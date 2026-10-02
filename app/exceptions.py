@@ -48,6 +48,10 @@ class WorkerUnavailableException(JudgingFailure):
     code: ClassVar[str] = "WORKER_UNAVAILABLE"
 
 
+class DatabaseUnreadableException(JudgingFailure):
+    code: ClassVar[str] = "DATABASE_UNREADABLE"
+
+
 class InvalidColumnsException(JudgingFailure):
     code: ClassVar[str] = "INVALID_COLUMNS"
 

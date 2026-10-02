@@ -28,6 +28,7 @@ from app.db import (
 from app.entity import Entity
 from app.exceptions import (
     AbsentNotInPairException,
+    DatabaseUnreadableException,
     IncorrectPairFormatException,
     JudgeDoesNotOwnPairException,
     JudgingAlreadyStartedException,
@@ -104,6 +105,7 @@ class JudgeWorker:
         self._strikes: list[int] = []
         self._last_skips: dict[str, AbsentSkip] = {}
         self._ready = threading.Event()
+        self._unreadable = False
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
             target=self._run, name="judge-worker", daemon=True
@@ -213,6 +215,12 @@ class JudgeWorker:
             if job is None:
                 reply.put(None)
                 return
+            # A bound method is a new object on each access, so compare the
+            # underlying function. Reset is the one command allowed through.
+            resetting = getattr(job, "__func__", None) is type(self)._reset
+            if self._unreadable and not resetting:
+                reply.put(DatabaseUnreadableException())
+                continue
             self._busy_since = time.monotonic()
             try:
                 reply.put(job())
@@ -238,10 +246,14 @@ class JudgeWorker:
         try:
             self._load()
         except DatabaseError:
-            # The file is from another schema. Delete it and start empty so a
-            # deploy does not stay crash-looping on the old volume.
-            logger.exception("SQLite database could not be loaded; deleting it")
-            self._load_fresh()
+            # Leave the file in place. The process keeps serving so an
+            # organizer can call DELETE /database.
+            close_db()
+            self._unreadable = True
+            logger.critical(
+                "SQLite database could not be loaded. "
+                "DELETE /database to remove it and start empty."
+            )
 
     def _load(self) -> None:
         open_db()
@@ -253,6 +265,7 @@ class JudgeWorker:
 
     def _reset(self) -> None:
         self._load_fresh()
+        self._unreadable = False
 
     def _replace_entities(
         self, entities: list[Entity], headers: list[str]

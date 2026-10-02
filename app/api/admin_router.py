@@ -92,7 +92,8 @@ def stop_judging(session: SessionDep) -> JudgingModel:
     description=(
         "Delete the SQLite database and start empty. "
         "Judging is off afterward. "
-        "Startup does the same when it cannot read the file."
+        "If startup cannot read the file, it logs that and keeps serving "
+        "until this route is called."
     ),
     response_description="The database file was deleted.",
     dependencies=[limited("admin")],
