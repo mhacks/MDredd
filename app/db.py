@@ -154,8 +154,15 @@ def archive_db() -> Path | None:
     try:
         return _archive_closed_db()
     finally:
+        # A failed archive must leave logging and SQLite usable.
+        attach_log_file()
         if db.is_closed():
-            open_db()
+            try:
+                open_db()
+            except Exception:
+                logger.exception(
+                    "Could not reopen the SQLite database after archive failed"
+                )
 
 
 def _archive_closed_db() -> Path | None:
@@ -169,22 +176,18 @@ def _archive_closed_db() -> Path | None:
     candidates.append(log_path())
     existing = [path for path in candidates if path.is_file()]
     if not existing:
-        attach_log_file()
-        open_db()
         return None
-    destination = _archive_directory(archive_root())
-    destination.mkdir(parents=True)
+    destination = _create_archive_directory(archive_root())
     logger.info("Archiving database to %s", destination)
     detach_log_file()
     try:
         _move_together(existing, destination)
     except Exception:
-        attach_log_file()
         if not any(destination.iterdir()):
             destination.rmdir()
         raise
-    attach_log_file()
     open_db()
+    attach_log_file()
     logger.info("Archived database to %s", destination)
     return destination
 
@@ -228,14 +231,20 @@ def list_archive_files(name: str) -> list[Path]:
     return sorted(file for file in path.iterdir() if file.is_file())
 
 
-def _archive_directory(root: Path) -> Path:
+def _create_archive_directory(root: Path) -> Path:
+    # mkdir is the existence check. A name chosen earlier can appear before
+    # create, and that must not leave SQLite closed or the log detached.
+    root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    candidate = root / stamp
-    suffix = 2
-    while candidate.exists():
-        candidate = root / f"{stamp}-{suffix}"
-        suffix += 1
-    return candidate
+    suffix = 1
+    while True:
+        name = stamp if suffix == 1 else f"{stamp}-{suffix}"
+        try:
+            (root / name).mkdir()
+        except FileExistsError:
+            suffix += 1
+            continue
+        return root / name
 
 
 def load_state() -> JudgeRecord:
