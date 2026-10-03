@@ -15,7 +15,12 @@ class Entity(BaseModel):
             text = raw_csv.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise InvalidColumnsException([]) from exc
-        headers = _header_row(text)
+        header_row = _header_row(text)
+        # A spreadsheet that re-saves the export pads every row, header
+        # included, with unnamed columns. They have no name to store a value
+        # under, so they are dropped rather than rejected.
+        named = [index for index, name in enumerate(header_row) if name.strip()]
+        headers = [header_row[index] for index in named]
         _require_headers(headers)
         try:
             rows = list(csv.reader(io.StringIO(text)))[1:]
@@ -24,9 +29,13 @@ class Entity(BaseModel):
         # Devpost headers only the first team member, so larger teams' rows run
         # past the header. Blank lines are skipped, short rows padded, and
         # cells past the last header dropped.
-        width = len(headers)
         entities = [
-            Entity(attributes=dict(zip(headers, [*row, *[""] * (width - len(row))])))
+            Entity(
+                attributes={
+                    headers[position]: row[index] if index < len(row) else ""
+                    for position, index in enumerate(named)
+                }
+            )
             for row in rows
             if any(cell.strip() for cell in row)
         ]
@@ -43,12 +52,14 @@ def _header_row(text: str) -> list[str]:
 
 
 def _require_headers(headers: list[str]) -> None:
+    if not headers:
+        raise InvalidColumnsException([])
     seen: set[str] = set()
-    invalid: list[str] = []
+    duplicates: list[str] = []
     for header in headers:
-        if header == "" or header in seen:
-            invalid.append(header)
+        if header in seen:
+            duplicates.append(header)
             continue
         seen.add(header)
-    if invalid:
-        raise InvalidColumnsException(invalid)
+    if duplicates:
+        raise InvalidColumnsException(duplicates)
