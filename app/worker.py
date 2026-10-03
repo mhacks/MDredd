@@ -164,6 +164,9 @@ class JudgeWorker:
     def submit(self, comparison: ComparisonInputModel) -> None:
         self._call(lambda: self._submit(comparison))
 
+    def projects(self) -> list[EntityWithId]:
+        return self._call(self._projects_snapshot)
+
     def rankings(self) -> list[EntityWithId]:
         return self._call(self._rankings_snapshot)
 
@@ -582,6 +585,12 @@ class JudgeWorker:
 
     def _with_id(self, entity: Entity, index: int) -> EntityWithId:
         return EntityWithId(attributes=dict(entity.attributes), id=index)
+
+    def _projects_snapshot(self) -> list[EntityWithId]:
+        return [
+            self._with_id(entity, index)
+            for index, entity in enumerate(self._entities)
+        ]
 
     def _rankings_snapshot(self) -> list[EntityWithId]:
         # Rankings stay readable after judging stops; only a missing model blocks them.
