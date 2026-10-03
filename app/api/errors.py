@@ -34,7 +34,9 @@ _STATUS: dict[type[JudgingFailure], int] = {
     PoolExhaustedException: status.HTTP_409_CONFLICT,
     DatabaseUnreadableException: status.HTTP_503_SERVICE_UNAVAILABLE,
     WorkerUnavailableException: status.HTTP_503_SERVICE_UNAVAILABLE,
-    DevpostUnresolvedException: status.HTTP_502_BAD_GATEWAY,
+    # Not 502: Cloudflare, in front of the load balancer, replaces a 502 body
+    # with its own page and the list of failed rows would be lost.
+    DevpostUnresolvedException: status.HTTP_422_UNPROCESSABLE_CONTENT,
 }
 
 
@@ -71,10 +73,6 @@ _DOCUMENTED: dict[int, dict[str, object]] = {
     status.HTTP_429_TOO_MANY_REQUESTS: {
         "model": RateError,
         "description": "The rate limit is exhausted.",
-    },
-    status.HTTP_502_BAD_GATEWAY: {
-        "model": CodeError,
-        "description": "Some submission URLs did not resolve on Devpost.",
     },
     status.HTTP_503_SERVICE_UNAVAILABLE: {
         "model": CodeError,
