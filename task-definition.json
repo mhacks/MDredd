@@ -1,0 +1,89 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "mdredd",
+      "image": "AWS_ACCOUNT_ID.dkr.ecr.us-east-2.amazonaws.com/mdredd:latest",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp",
+          "name": "mdredd-8000-tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "MDREDD_DB_FILE",
+          "value": "/app/data/mdredd.db"
+        },
+        {
+          "name": "MDREDD_CORS_ORIGINS",
+          "value": "[\"https://www.mhacks.org\"]"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "mdredd-data",
+          "containerPath": "/app/data",
+          "readOnly": false
+        }
+      ],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "MDREDD_API_TOKEN",
+          "valueFrom": "arn:aws:ssm:us-east-2:AWS_ACCOUNT_ID:parameter/mhacks-secrets/MDREDD_API_TOKEN"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/mhacks-mdredd",
+          "awslogs-region": "us-east-2",
+          "awslogs-stream-prefix": "ecs"
+        },
+        "secretOptions": []
+      },
+      "healthCheck": {
+        "command": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "systemControls": []
+    }
+  ],
+  "family": "mhacks-mdredd",
+  "executionRoleArn": "arn:aws:iam::AWS_ACCOUNT_ID:role/mhacks-mdredd-exec",
+  "taskRoleArn": "arn:aws:iam::AWS_ACCOUNT_ID:role/mhacks-mdredd-task",
+  "networkMode": "awsvpc",
+  "volumes": [
+    {
+      "name": "mdredd-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "EFS_FILE_SYSTEM_ID",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "EFS_ACCESS_POINT_ID",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "placementConstraints": [],
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048"
+}

@@ -19,7 +19,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # The app only needs to write its database, so it runs unprivileged and owns
 # only the data directory.
-RUN useradd --system --uid 10001 --no-create-home mdredd \
+RUN groupadd --system --gid 10001 mdredd \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home mdredd \
     && mkdir -p /app/data \
     && chown mdredd:mdredd /app/data
 USER mdredd
