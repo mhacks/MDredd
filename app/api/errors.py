@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from app.exceptions import (
     AbsentNotInPairException,
+    DatabaseUnreadableException,
     IncorrectPairFormatException,
     InvalidColumnsException,
     JudgeDoesNotOwnPairException,
@@ -13,6 +14,7 @@ from app.exceptions import (
     JudgingNotStartedException,
     PoolExhaustedException,
     TooFewEntitiesException,
+    UnknownArchiveException,
     UnknownRowException,
     WorkerUnavailableException,
 )
@@ -26,8 +28,10 @@ _STATUS: dict[type[JudgingFailure], int] = {
     TooFewEntitiesException: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvalidColumnsException: status.HTTP_422_UNPROCESSABLE_CONTENT,
     UnknownRowException: status.HTTP_404_NOT_FOUND,
+    UnknownArchiveException: status.HTTP_404_NOT_FOUND,
     AbsentNotInPairException: status.HTTP_409_CONFLICT,
     PoolExhaustedException: status.HTTP_409_CONFLICT,
+    DatabaseUnreadableException: status.HTTP_503_SERVICE_UNAVAILABLE,
     WorkerUnavailableException: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 

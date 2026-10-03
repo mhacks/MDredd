@@ -8,11 +8,13 @@ from typing import cast
 
 import jax.numpy as jnp
 import numpy as np
+from peewee import DatabaseError
 
 from app.algorithm import BayesianDecisionProcess
 from app.db import (
     AbsentSkip,
     JudgeRecord,
+    archive_db,
     close_db,
     load_state,
     open_db,
@@ -26,6 +28,7 @@ from app.db import (
 from app.entity import Entity
 from app.exceptions import (
     AbsentNotInPairException,
+    DatabaseUnreadableException,
     IncorrectPairFormatException,
     JudgeDoesNotOwnPairException,
     JudgingAlreadyStartedException,
@@ -71,6 +74,7 @@ def _refund(frequency: jnp.ndarray, entity_id: int) -> jnp.ndarray:
 
 Job = Callable[[], object] | None
 Reply = queue.Queue[object]
+Command = tuple[Job, Reply, bool]
 
 
 class JudgeWorker:
@@ -89,7 +93,7 @@ class JudgeWorker:
         stuck_after: float = settings.WORKER_STUCK_SECONDS,
         queue_size: int = settings.WORKER_QUEUE_SIZE,
     ) -> None:
-        self.channel: queue.Queue[tuple[Job, Reply]] = queue.Queue(maxsize=queue_size)
+        self.channel: queue.Queue[Command] = queue.Queue(maxsize=queue_size)
         self._timeout = timeout
         self._stuck_after = stuck_after
         self._busy_since: float | None = None
@@ -102,6 +106,7 @@ class JudgeWorker:
         self._strikes: list[int] = []
         self._last_skips: dict[str, AbsentSkip] = {}
         self._ready = threading.Event()
+        self._unreadable = False
         self._bootstrap_error: Exception | None = None
         self._thread = threading.Thread(
             target=self._run, name="judge-worker", daemon=True
@@ -118,7 +123,7 @@ class JudgeWorker:
             return
         reply: Reply = queue.Queue(maxsize=1)
         try:
-            self.channel.put((None, reply), timeout=self._timeout)
+            self.channel.put((None, reply, True), timeout=self._timeout)
             _ = reply.get(timeout=self._timeout)
         except (queue.Full, queue.Empty):
             logger.error("Judge worker did not stop in time")
@@ -159,6 +164,9 @@ class JudgeWorker:
     def submit(self, comparison: ComparisonInputModel) -> None:
         self._call(lambda: self._submit(comparison))
 
+    def projects(self) -> list[EntityWithId]:
+        return self._call(self._projects_snapshot)
+
     def rankings(self) -> list[EntityWithId]:
         return self._call(self._rankings_snapshot)
 
@@ -168,12 +176,15 @@ class JudgeWorker:
     def restore(self, entity_id: int) -> PoolEntryModel:
         return self._call(lambda: self._restore(entity_id))
 
-    def _call[T](self, fn: Callable[[], T]) -> T:
+    def archive(self) -> str | None:
+        return self._call(self._archive, when_unreadable=True)
+
+    def _call[T](self, fn: Callable[[], T], *, when_unreadable: bool = False) -> T:
         if not self.healthy():
             raise WorkerUnavailableException()
         reply: Reply = queue.Queue(maxsize=1)
         try:
-            self.channel.put_nowait((fn, reply))
+            self.channel.put_nowait((fn, reply, when_unreadable))
         except queue.Full:
             logger.error("Judge worker queue is full")
             raise WorkerUnavailableException() from None
@@ -204,10 +215,13 @@ class JudgeWorker:
 
     def _serve(self) -> None:
         while True:
-            job, reply = self.channel.get()
+            job, reply, when_unreadable = self.channel.get()
             if job is None:
                 reply.put(None)
                 return
+            if self._unreadable and not when_unreadable:
+                reply.put(DatabaseUnreadableException())
+                continue
             self._busy_since = time.monotonic()
             try:
                 reply.put(job())
@@ -224,14 +238,32 @@ class JudgeWorker:
     def _fail_pending(self) -> None:
         while True:
             try:
-                job, reply = self.channel.get_nowait()
+                job, reply, _when_unreadable = self.channel.get_nowait()
             except queue.Empty:
                 return
             reply.put(None if job is None else WorkerUnavailableException())
 
     def _bootstrap(self) -> None:
-        open_db()
+        try:
+            open_db()
+            self._install(load_state())
+        except DatabaseError:
+            # Leave the file in place. The process keeps serving so an
+            # organizer can call POST /archive.
+            close_db()
+            self._unreadable = True
+            logger.critical(
+                "SQLite database could not be loaded. "
+                "POST /archive to move it aside and start empty."
+            )
+
+    def _archive(self) -> str | None:
+        destination = archive_db()
         self._install(load_state())
+        self._unreadable = False
+        if destination is None:
+            return None
+        return destination.name
 
     def _replace_entities(
         self, entities: list[Entity], headers: list[str]
@@ -553,6 +585,12 @@ class JudgeWorker:
 
     def _with_id(self, entity: Entity, index: int) -> EntityWithId:
         return EntityWithId(attributes=dict(entity.attributes), id=index)
+
+    def _projects_snapshot(self) -> list[EntityWithId]:
+        return [
+            self._with_id(entity, index)
+            for index, entity in enumerate(self._entities)
+        ]
 
     def _rankings_snapshot(self) -> list[EntityWithId]:
         # Rankings stay readable after judging stops; only a missing model blocks them.

@@ -36,6 +36,10 @@ class UnknownRowException(JudgingFailure):
     code: ClassVar[str] = "UNKNOWN_ROW"
 
 
+class UnknownArchiveException(JudgingFailure):
+    code: ClassVar[str] = "UNKNOWN_ARCHIVE"
+
+
 class AbsentNotInPairException(JudgingFailure):
     code: ClassVar[str] = "ABSENT_NOT_IN_PAIR"
 
@@ -46,6 +50,10 @@ class PoolExhaustedException(JudgingFailure):
 
 class WorkerUnavailableException(JudgingFailure):
     code: ClassVar[str] = "WORKER_UNAVAILABLE"
+
+
+class DatabaseUnreadableException(JudgingFailure):
+    code: ClassVar[str] = "DATABASE_UNREADABLE"
 
 
 class InvalidColumnsException(JudgingFailure):

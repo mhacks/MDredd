@@ -17,6 +17,17 @@ router = APIRouter(
 )
 
 
+@router.get(
+    "/projects",
+    response_model=list[RowModel],
+    tags=["admin"],
+    description="List every project in upload order. Organizers and judges share this route.",
+    response_description="Projects in upload order.",
+)
+def get_projects(session: SessionDep) -> list[RowModel]:
+    return [RowModel.from_entity(entity) for entity in session.worker.projects()]
+
+
 @router.post(
     "/pairs",
     response_model=PairModel,

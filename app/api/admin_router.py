@@ -1,8 +1,15 @@
+import io
+import zipfile
+
 from fastapi import APIRouter, Depends, UploadFile, status
+from fastapi.responses import Response
 
 from app.api.deps import SessionDep, limited, require_session
 from app.api.errors import error_responses
+from app.db import list_archive_files, list_archives
 from app.models import (
+    ArchiveListModel,
+    ArchiveModel,
     ColumnsModel,
     DatasetModel,
     JudgingModel,
@@ -83,6 +90,52 @@ def resume_judging(session: SessionDep) -> JudgingModel:
 )
 def stop_judging(session: SessionDep) -> JudgingModel:
     return JudgingModel(is_started=session.worker.stop())
+
+
+@router.post(
+    "/archive",
+    response_model=ArchiveModel,
+    description=(
+        "Move the SQLite database and the log file into a new archive folder "
+        "and start empty. Earlier archives are kept. Judging is off afterward. "
+        "If startup cannot read the file, it logs that and keeps serving "
+        "until this route is called."
+    ),
+    response_description="The folder that holds the archived database and log.",
+    dependencies=[limited("admin")],
+    responses=error_responses(limited=True),
+)
+def archive_database(session: SessionDep) -> ArchiveModel:
+    return ArchiveModel(path=session.worker.archive())
+
+
+@router.get(
+    "/archives",
+    response_model=ArchiveListModel,
+    description="List archived databases, newest first.",
+    response_description="Archive folder names, newest first.",
+)
+def get_archives() -> ArchiveListModel:
+    return ArchiveListModel(archives=list_archives())
+
+
+@router.get(
+    "/archives/{archive_id}",
+    description="Download every file in one archive as a zip.",
+    response_description="A zip of the database, its sidecars, and the log.",
+    responses=error_responses(status.HTTP_404_NOT_FOUND),
+)
+def get_archive(archive_id: str) -> Response:
+    files = list_archive_files(archive_id)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            archive.write(path, arcname=path.name)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{archive_id}.zip"'},
+    )
 
 
 @router.get(
