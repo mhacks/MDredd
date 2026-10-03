@@ -50,9 +50,11 @@ Errors are JSON: `{"detail":{"code":"..."}}`. Rate limits add `retry_after_ms` a
    Uploading that same CSV again while judging is on succeeds and changes nothing. A different CSV while judging is on is `409` `JUDGING_ALREADY_STARTED`. Stop judging, then upload.
 3. `POST /judging/stop` rejects new pairs and comparisons and keeps the dataset, open pairs, strikes, and rankings. `POST /judging/start` and `POST /judging/resume` are the same call: turn judging back on. Repeating the call that matches the current state succeeds. `GET /judging` returns `{ "is_started": true }` or `false`.
 4. `GET /pool` lists every project in upload order: `id`, `attributes`, `strikes`, and `removed`. `removed` is true once `strikes` reaches the strike limit. `POST /pool/{id}/restore` clears that project's strikes and returns it to the draw. Restoring a project that is still active succeeds and changes nothing.
-5. `GET /rankings` returns every row, strongest first. The response is ids and attributes only. Rankings stay readable after stop. Before any dataset exists they are `409` `JUDGING_NEVER_STARTED`. `GET /columns` lists headers. `GET /rows/{id}` returns one row, or `404` `UNKNOWN_ROW`.
+5. `GET /projects` lists every project in upload order. The response is ids and attributes only. Before any dataset exists the list is empty. `GET /rankings` returns every row, strongest first, with the same shape. Rankings stay readable after stop. Before any dataset exists they are `409` `JUDGING_NEVER_STARTED`. `GET /columns` lists headers. `GET /rows/{id}` returns one row, or `404` `UNKNOWN_ROW`.
 
 ## Judge flow
+
+`GET /projects` lists every project in upload order. The response is ids and attributes only, the same list an organizer receives. Before any dataset exists the list is empty.
 
 A judge holds at most one open pair. The screen loop is: ask for a pair, show the two projects, submit a winner or an absence, then ask again.
 
@@ -108,7 +110,7 @@ Rate limits are global for the process, shared by every judge:
 | `POST /comparisons` | 2 | about 1 per minute |
 | Admin writes (upload, start, stop, restore) | 4 | about 1 every 30 seconds |
 
-`429` is `{"detail":{"code":"RATE_LIMITED","retry_after_ms":...}}` plus `Retry-After`. Retry the same body. `GET /judging`, `/rankings`, `/pool`, `/rows`, and `/columns` are not limited.
+`429` is `{"detail":{"code":"RATE_LIMITED","retry_after_ms":...}}` plus `Retry-After`. Retry the same body. `GET /judging`, `/projects`, `/rankings`, `/pool`, `/rows`, and `/columns` are not limited.
 
 If the judge worker is dead, stuck, or its queue is full, the call is `503` `WORKER_UNAVAILABLE`. State already committed is kept. Retry shortly.
 
