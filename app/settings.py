@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     WORKER_QUEUE_SIZE: int = 8
     WATCHDOG_INTERVAL_SECONDS: float = 5
     STRIKE_LIMIT: int = 3
-    MIN_JUDGMENTS: int = Field(default=5, ge=0)
+    MIN_JUDGMENTS: int = Field(default=3, ge=0)
 
     @field_validator("API_TOKEN")
     @classmethod
