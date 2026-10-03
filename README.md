@@ -24,7 +24,7 @@ The database lives in the `mdredd-data` volume at `/app/data/mdredd.db`. `GET /h
 | `MDREDD_DB_FILE` | `mdredd.db` | SQLite path |
 | `MDREDD_CORS_ORIGINS` | `["http://localhost:8000"]` | Allowed browser origins |
 | `MDREDD_STRIKE_LIMIT` | `3` | Consecutive absences before a project is removed from the draw |
-| `MDREDD_MIN_JUDGMENTS` | `5` | Appearances each active project gets before open sampling |
+| `MDREDD_MIN_JUDGMENTS` | `3` | Appearances each active project gets before open sampling |
 
 ## Authentication
 
