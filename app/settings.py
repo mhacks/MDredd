@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     WATCHDOG_INTERVAL_SECONDS: float = 5
     STRIKE_LIMIT: int = 3
     MIN_JUDGMENTS: int = Field(default=3, ge=0)
+    # Sent to Devpost when resolving submission URLs, so private submissions resolve.
+    DEVPOST_COOKIE: str = ""
+    DEVPOST_CONCURRENCY: int = Field(default=4, ge=1)
 
     @field_validator("API_TOKEN")
     @classmethod

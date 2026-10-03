@@ -1,7 +1,6 @@
 import csv
 import io
 
-import pandas as pd
 from pydantic import BaseModel
 
 from app.exceptions import InvalidColumnsException, TooFewEntitiesException
@@ -19,16 +18,17 @@ class Entity(BaseModel):
         headers = _header_row(text)
         _require_headers(headers)
         try:
-            frame = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
-        except pd.errors.EmptyDataError as exc:
-            raise TooFewEntitiesException() from exc
-        except pd.errors.ParserError as exc:
+            rows = list(csv.reader(io.StringIO(text)))[1:]
+        except csv.Error as exc:
             raise InvalidColumnsException([]) from exc
-        if [str(column) for column in frame.columns] != headers:
-            raise InvalidColumnsException(headers)
+        # Devpost headers only the first team member, so larger teams' rows run
+        # past the header. Blank lines are skipped, short rows padded, and
+        # cells past the last header dropped.
+        width = len(headers)
         entities = [
-            Entity(attributes=dict(zip(headers, map(str, row), strict=True)))
-            for row in frame.itertuples(index=False, name=None)
+            Entity(attributes=dict(zip(headers, [*row, *[""] * (width - len(row))])))
+            for row in rows
+            if any(cell.strip() for cell in row)
         ]
         return headers, entities
 

@@ -3,6 +3,7 @@ import os
 import threading
 from collections.abc import Callable
 
+from app import project
 from app.entity import Entity
 from app.settings import settings
 from app.worker import JudgeWorker
@@ -33,7 +34,14 @@ class Session:
 
     def start(self, entity_csv: bytes) -> list[str]:
         headers, entities = Entity.list_from_csv(entity_csv)
-        return self.worker.replace_entities(entities, headers)
+        entities = project.submitted(headers, entities)
+        # Answer a repeat or a conflict before spending a Devpost request per row.
+        current = self.worker.check_replaceable(entities, headers)
+        if current is not None:
+            return current
+        # Resolve here, off the worker thread, which would time out on Devpost.
+        entities = project.with_project_urls(entities)
+        return self.worker.replace_entities(entities, [*headers, project.PROJECT_URL])
 
     def _watch(self) -> None:
         while not self._closed.wait(settings.WATCHDOG_INTERVAL_SECONDS):

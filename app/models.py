@@ -1,5 +1,8 @@
+from typing import Annotated
+
 from pydantic import BaseModel, Field
 
+from app import project
 from app.entity import Entity
 
 
@@ -34,6 +37,17 @@ class RowModel(BaseModel):
         return cls(id=entity.id, attributes=dict(entity.attributes))
 
 
+class TablesInputModel(BaseModel):
+    tables: dict[Annotated[str, Field(min_length=1)], Annotated[int, Field(gt=0)]] = Field(
+        max_length=10_000
+    )
+
+
+class TablesModel(BaseModel):
+    stored: int
+    unknown_urls: list[str]
+
+
 class JudgingModel(BaseModel):
     is_started: bool
 
@@ -55,8 +69,24 @@ class ColumnsModel(BaseModel):
     headers: list[str]
 
 
+class ProjectModel(BaseModel):
+    id: int
+    url: str
+    name: str
+    tracks: list[str]
+
+    @classmethod
+    def from_entity(cls, entity: EntityWithId) -> ProjectModel:
+        return cls(
+            id=entity.id,
+            url=entity.attributes.get(project.PROJECT_URL, ""),
+            name=entity.attributes.get(project.TITLE, ""),
+            tracks=project.tracks(entity.attributes),
+        )
+
+
 class PairModel(BaseModel):
-    pair: tuple[RowModel, RowModel]
+    pair: tuple[ProjectModel, ProjectModel]
 
 
 class ComparisonResultModel(BaseModel):

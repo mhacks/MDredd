@@ -33,21 +33,27 @@ async def require_session(
 SessionDep = Annotated[Session, Depends(require_session)]
 
 
+def enforce_limit(request: Request, operation: Operation, key: str = "") -> None:
+    decision = limiter.try_consume(operation, key)
+    request.state.rate_limit_remaining = decision.remaining
+    if decision.allowed:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "code": "RATE_LIMITED",
+            "retry_after_ms": decision.retry_after_ms,
+        },
+        headers={
+            "Retry-After": str(max(1, math.ceil(decision.retry_after_ms / 1000)))
+        },
+    )
+
+
 def limited(operation: Operation) -> Depends:
+    """One bucket for every caller, for routes that are not per judge."""
+
     async def consume(request: Request, _session: SessionDep) -> None:
-        decision = limiter.try_consume(operation)
-        request.state.rate_limit_remaining = decision.remaining
-        if decision.allowed:
-            return
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "code": "RATE_LIMITED",
-                "retry_after_ms": decision.retry_after_ms,
-            },
-            headers={
-                "Retry-After": str(max(1, math.ceil(decision.retry_after_ms / 1000)))
-            },
-        )
+        enforce_limit(request, operation)
 
     return Depends(consume)

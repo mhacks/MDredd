@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.exceptions import (
     AbsentNotInPairException,
     DatabaseUnreadableException,
+    DevpostUnresolvedException,
     IncorrectPairFormatException,
     InvalidColumnsException,
     JudgeDoesNotOwnPairException,
@@ -33,6 +34,7 @@ _STATUS: dict[type[JudgingFailure], int] = {
     PoolExhaustedException: status.HTTP_409_CONFLICT,
     DatabaseUnreadableException: status.HTTP_503_SERVICE_UNAVAILABLE,
     WorkerUnavailableException: status.HTTP_503_SERVICE_UNAVAILABLE,
+    DevpostUnresolvedException: status.HTTP_502_BAD_GATEWAY,
 }
 
 
@@ -70,6 +72,10 @@ _DOCUMENTED: dict[int, dict[str, object]] = {
         "model": RateError,
         "description": "The rate limit is exhausted.",
     },
+    status.HTTP_502_BAD_GATEWAY: {
+        "model": CodeError,
+        "description": "Some submission URLs did not resolve on Devpost.",
+    },
     status.HTTP_503_SERVICE_UNAVAILABLE: {
         "model": CodeError,
         "description": "The judge worker is unavailable.",
@@ -88,6 +94,8 @@ def judging_failure_handler(_request: Request, exc: JudgingFailure) -> JSONRespo
     detail: dict[str, object] = {"code": exc.code}
     if isinstance(exc, InvalidColumnsException):
         detail["names"] = exc.names
+    if isinstance(exc, DevpostUnresolvedException):
+        detail["failures"] = exc.failures
     return JSONResponse(
         status_code=_STATUS.get(type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR),
         content={"detail": detail},
