@@ -1,3 +1,4 @@
+import csv
 import io
 import zipfile
 
@@ -15,7 +16,11 @@ from app.models import (
     JudgingModel,
     PoolEntryModel,
     RowModel,
+    TablesInputModel,
+    TablesModel,
 )
+
+TABLE_NUMBER = "Table Number"
 
 router = APIRouter(
     tags=["admin"],
@@ -193,3 +198,45 @@ def get_pool(session: SessionDep) -> list[PoolEntryModel]:
 )
 def restore_pool_entity(entity_id: int, session: SessionDep) -> PoolEntryModel:
     return session.worker.restore(entity_id)
+
+
+@router.put(
+    "/tables",
+    response_model=TablesModel,
+    description=(
+        "Replace the project URL to table number mapping. URLs are matched to "
+        "each project's Project Url, ignoring case, www, a trailing slash, and the query."
+    ),
+    response_description="How many entries are stored, and the URLs that match no project.",
+    dependencies=[limited("admin")],
+    responses=error_responses(limited=True),
+)
+def put_tables(body: TablesInputModel, session: SessionDep) -> TablesModel:
+    unknown = session.worker.replace_tables(body.tables)
+    return TablesModel(stored=len(body.tables), unknown_urls=unknown)
+
+
+@router.get(
+    "/export",
+    description=(
+        f"Download every project in upload order as CSV: id, every stored column, "
+        f"and {TABLE_NUMBER}, which is empty when no table is mapped to its Project Url."
+    ),
+    response_description="A CSV of every project.",
+    response_class=Response,
+    responses={200: {"content": {"text/csv": {}}}},
+)
+def export_projects(session: SessionDep) -> Response:
+    headers, rows = session.worker.export()
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["id", *headers, TABLE_NUMBER])
+    for row, table in rows:
+        writer.writerow(
+            [row.id, *(row.attributes.get(name, "") for name in headers), table or ""]
+        )
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="projects.csv"'},
+    )

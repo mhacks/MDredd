@@ -107,6 +107,15 @@ class LastSkip(Model):
         table_name = "last_skips"
 
 
+class ProjectTable(Model):
+    project_url = TextField(primary_key=True)
+    table_number = IntegerField()
+
+    class Meta:
+        database = db
+        table_name = "project_tables"
+
+
 # Absent project ids, and the pair produced by that report. A missing pair
 # means the report committed and the next draw did not.
 AbsentSkip = tuple[tuple[int, ...], tuple[int, int] | None]
@@ -122,6 +131,9 @@ class JudgeRecord:
     strikes: list[int]
     last_skips: dict[str, AbsentSkip]
     bdp: BayesianDecisionProcess | None
+    # Normalized project URL to table number, sent by the dashboard. It is kept
+    # across uploads, since it is keyed by URL and not by row.
+    tables: dict[str, int]
 
 
 def open_db() -> None:
@@ -136,6 +148,7 @@ def open_db() -> None:
             JudgeState,
             EntityState,
             LastSkip,
+            ProjectTable,
         ]
     )
     _migrate_strikes()
@@ -264,6 +277,7 @@ def load_state() -> JudgeRecord:
         }
         frequencies, strikes = _load_entity_state(len(entities))
         last_skips = _load_last_skips()
+        tables = _load_tables()
         judge = Judge.get_or_none(Judge.id == 1)
         if judge is None:
             return JudgeRecord(
@@ -275,6 +289,7 @@ def load_state() -> JudgeRecord:
                 strikes=strikes,
                 last_skips=last_skips,
                 bdp=None,
+                tables=tables,
             )
         model = _load_model(len(entities), frequencies)
         return JudgeRecord(
@@ -286,6 +301,7 @@ def load_state() -> JudgeRecord:
             strikes=strikes,
             last_skips=last_skips,
             bdp=model,
+            tables=tables,
         )
 
 
@@ -301,8 +317,10 @@ def replace_state(
         strikes=[0] * len(entities),
         last_skips={},
         bdp=bdp,
+        tables={},
     )
     with db.atomic():
+        record.tables = _load_tables()
         EntityRow.delete().execute()
         EntityState.delete().execute()
         Assignment.delete().execute()
@@ -475,6 +493,18 @@ def save_absence(
         ).execute()
 
 
+def save_tables(tables: dict[str, int]) -> None:
+    with db.atomic():
+        ProjectTable.delete().execute()
+        if tables:
+            ProjectTable.insert_many(
+                [
+                    {"project_url": url, "table_number": number}
+                    for url, number in tables.items()
+                ]
+            ).execute()
+
+
 def save_enabled(enabled: bool) -> None:
     updated = Judge.update(enabled=enabled).where(Judge.id == 1).execute()
     if updated != 1:
@@ -521,6 +551,12 @@ def _load_entity_state(entity_count: int) -> tuple[list[int], list[int]]:
         [frequency for _entity_id, frequency, _strikes in rows],
         [strike_count for _entity_id, _frequency, strike_count in rows],
     )
+
+
+def _load_tables() -> dict[str, int]:
+    return {
+        str(row.project_url): int(row.table_number) for row in ProjectTable.select()
+    }
 
 
 def _load_last_skips() -> dict[str, AbsentSkip]:

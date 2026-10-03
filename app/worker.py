@@ -24,7 +24,9 @@ from app.db import (
     save_comparison,
     save_enabled,
     save_strikes,
+    save_tables,
 )
+from app import project
 from app.entity import Entity
 from app.exceptions import (
     AbsentNotInPairException,
@@ -105,6 +107,7 @@ class JudgeWorker:
         self._completed: dict[str, tuple[int, int, int]] = {}
         self._strikes: list[int] = []
         self._last_skips: dict[str, AbsentSkip] = {}
+        self._tables: dict[str, int] = {}
         self._ready = threading.Event()
         self._unreadable = False
         self._bootstrap_error: Exception | None = None
@@ -150,6 +153,11 @@ class JudgeWorker:
     ) -> list[str]:
         return self._call(lambda: self._replace_entities(entities, headers))
 
+    def check_replaceable(
+        self, entities: list[Entity], headers: list[str]
+    ) -> list[str] | None:
+        return self._call(lambda: self._check_replaceable(entities, headers))
+
     def resume(self) -> bool:
         return self._call(lambda: self._set_enabled(True))
 
@@ -175,6 +183,12 @@ class JudgeWorker:
 
     def restore(self, entity_id: int) -> PoolEntryModel:
         return self._call(lambda: self._restore(entity_id))
+
+    def replace_tables(self, tables: dict[str, int]) -> list[str]:
+        return self._call(lambda: self._replace_tables(tables))
+
+    def export(self) -> tuple[list[str], list[tuple[EntityWithId, int | None]]]:
+        return self._call(self._export)
 
     def archive(self) -> str | None:
         return self._call(self._archive, when_unreadable=True)
@@ -277,6 +291,18 @@ class JudgeWorker:
         bdp = BayesianDecisionProcess.create(len(entities))
         self._install(replace_state(headers, entities, bdp))
         return list(self.headers)
+
+    def _check_replaceable(
+        self, entities: list[Entity], headers: list[str]
+    ) -> list[str] | None:
+        # Compares an upload before its project URLs are resolved.
+        if not self.enabled:
+            return None
+        stored = [project.without_project_url(entity) for entity in self._entities]
+        stored_headers = [name for name in self.headers if name != project.PROJECT_URL]
+        if entities == stored and headers == stored_headers:
+            return list(self.headers)
+        raise JudgingAlreadyStartedException()
 
     def _set_enabled(self, enabled: bool) -> bool:
         if enabled and self.bdp is None:
@@ -527,6 +553,34 @@ class JudgeWorker:
             raise PoolExhaustedException()
         return self._pair(*new_pair)
 
+    def _replace_tables(self, tables: dict[str, int]) -> list[str]:
+        """Store the whole mapping and return the URLs that match no project."""
+        normalized = {
+            key: number
+            for url, number in tables.items()
+            if (key := project.normalize_url(url))
+        }
+        save_tables(normalized)
+        self._tables = normalized
+        known = {
+            project.normalize_url(entity.attributes.get(project.PROJECT_URL, ""))
+            for entity in self._entities
+        }
+        return [url for url in tables if project.normalize_url(url) not in known]
+
+    def _export(self) -> tuple[list[str], list[tuple[EntityWithId, int | None]]]:
+        return list(self.headers), [
+            (
+                self._with_id(entity, index),
+                self._table_for(entity),
+            )
+            for index, entity in enumerate(self._entities)
+        ]
+
+    def _table_for(self, entity: Entity) -> int | None:
+        key = project.normalize_url(entity.attributes.get(project.PROJECT_URL, ""))
+        return self._tables.get(key) if key else None
+
     def _pool(self) -> list[PoolEntryModel]:
         return [self._pool_entry(index) for index in range(len(self._entities))]
 
@@ -564,6 +618,7 @@ class JudgeWorker:
         self._completed = dict(record.completed)
         self._strikes = list(record.strikes)
         self._last_skips = dict(record.last_skips)
+        self._tables = dict(record.tables)
         self.bdp = record.bdp
 
     def _require_bdp(self) -> BayesianDecisionProcess:

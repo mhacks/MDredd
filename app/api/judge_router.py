@@ -7,6 +7,7 @@ from app.models import (
     ComparisonResultModel,
     PairModel,
     PairRequestModel,
+    ProjectModel,
     RowModel,
 )
 
@@ -36,14 +37,14 @@ def get_projects(session: SessionDep) -> list[RowModel]:
         "One absent project from that pair forfeits, and the other project wins. "
         "Both absent strikes each project and draws a new pair."
     ),
-    response_description="The two rows to compare.",
+    response_description="The two projects to compare: id, Devpost URL, name, and tracks.",
     dependencies=[limited("pair")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
 )
 def create_pair(body: PairRequestModel, session: SessionDep) -> PairModel:
     left, right = session.worker.request_pair(body)
     return PairModel(
-        pair=(RowModel.from_entity(left), RowModel.from_entity(right))
+        pair=(ProjectModel.from_entity(left), ProjectModel.from_entity(right))
     )
 
 

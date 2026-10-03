@@ -62,3 +62,11 @@ class InvalidColumnsException(JudgingFailure):
     def __init__(self, names: list[str]) -> None:
         self.names = names
         super().__init__()
+
+
+class DevpostUnresolvedException(JudgingFailure):
+    code: ClassVar[str] = "DEVPOST_UNRESOLVED"
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        self.failures = failures
+        super().__init__()
