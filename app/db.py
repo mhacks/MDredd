@@ -1,4 +1,7 @@
+import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -15,7 +18,11 @@ from peewee import (
 
 from app.algorithm import BayesianDecisionProcess
 from app.entity import Entity
+from app.exceptions import UnknownArchiveException
+from app.logging import attach_log_file, detach_log_file, log_path
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # FULL fsyncs each commit. A lock waits one second, then the worker fails the command.
 db = SqliteDatabase(
@@ -138,6 +145,106 @@ def open_db() -> None:
 def close_db() -> None:
     if not db.is_closed():
         db.close()
+
+
+def archive_db() -> Path | None:
+    # Move the file aside. create_tables will not alter a table that already
+    # exists, so a schema change has to start from an empty file.
+    close_db()
+    try:
+        return _archive_closed_db()
+    finally:
+        # A failed archive must leave logging and SQLite usable.
+        attach_log_file()
+        if db.is_closed():
+            try:
+                open_db()
+            except Exception:
+                logger.exception(
+                    "Could not reopen the SQLite database after archive failed"
+                )
+
+
+def _archive_closed_db() -> Path | None:
+    if settings.DB_FILE == ":memory:":
+        return None
+    db_path = Path(settings.DB_FILE)
+    candidates = [
+        db_path.with_name(db_path.name + suffix)
+        for suffix in ("", "-wal", "-shm", "-journal")
+    ]
+    candidates.append(log_path())
+    existing = [path for path in candidates if path.is_file()]
+    if not existing:
+        return None
+    destination = _create_archive_directory(archive_root())
+    logger.info("Archiving database to %s", destination)
+    detach_log_file()
+    try:
+        _move_together(existing, destination)
+    except Exception:
+        if not any(destination.iterdir()):
+            destination.rmdir()
+        raise
+    open_db()
+    attach_log_file()
+    logger.info("Archived database to %s", destination)
+    return destination
+
+
+def _move_together(sources: list[Path], destination: Path) -> None:
+    # A rename is atomic for one file. If a later file fails, put the earlier
+    # ones back so the database and its WAL are never split.
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source in sources:
+            target = destination / source.name
+            source.rename(target)
+            moved.append((target, source))
+    except Exception:
+        for target, source in reversed(moved):
+            try:
+                target.rename(source)
+            except Exception:
+                logger.exception("Could not move %s back to %s", target, source)
+        raise
+
+
+def archive_root() -> Path:
+    return Path(settings.DB_FILE).parent / "archive"
+
+
+def list_archives() -> list[str]:
+    root = archive_root()
+    if not root.is_dir():
+        return []
+    names = [path.name for path in root.iterdir() if path.is_dir()]
+    names.sort(reverse=True)
+    return names
+
+
+def list_archive_files(name: str) -> list[Path]:
+    root = archive_root()
+    path = (root / name).resolve()
+    if path.parent != root.resolve() or not path.is_dir():
+        raise UnknownArchiveException()
+    return sorted(file for file in path.iterdir() if file.is_file())
+
+
+def _create_archive_directory(root: Path) -> Path:
+    # mkdir is the existence check. A name chosen earlier can appear before
+    # create, and that must not leave SQLite closed or the log detached.
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = 1
+    while True:
+        name = stamp if suffix == 1 else f"{stamp}-{suffix}"
+        try:
+            (root / name).mkdir()
+        except FileExistsError:
+            suffix += 1
+            continue
+        return root / name
 
 
 def load_state() -> JudgeRecord:

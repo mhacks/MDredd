@@ -43,6 +43,14 @@ class DatasetModel(BaseModel):
     headers: list[str]
 
 
+class ArchiveModel(BaseModel):
+    path: str | None
+
+
+class ArchiveListModel(BaseModel):
+    archives: list[str]
+
+
 class ColumnsModel(BaseModel):
     headers: list[str]
 
