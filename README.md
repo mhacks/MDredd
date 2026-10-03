@@ -116,13 +116,13 @@ Drawing a pair is separate from strength. Each draw increments an appearance cou
 
 ## Limits
 
-Rate limits are global for the process, shared by every judge:
+`POST /pairs` and `POST /comparisons` are limited per `judge_id`, so judges sharing one client (such as the dashboard) do not slow each other down. Admin writes share one limit for the process:
 
-| Calls | Burst | Refill |
-|---|---|---|
-| `POST /pairs` | 6 | about 1 every 5 seconds |
-| `POST /comparisons` | 2 | about 1 per minute |
-| Admin writes (upload, start, stop, restore, tables) | 4 | about 1 every 30 seconds |
+| Calls | Limit applies to | Burst | Refill |
+|---|---|---|---|
+| `POST /pairs` | each judge | 6 | about 1 every 5 seconds |
+| `POST /comparisons` | each judge | 2 | about 1 per minute |
+| Admin writes (upload, start, stop, restore, tables) | everyone | 4 | about 1 every 30 seconds |
 
 `429` is `{"detail":{"code":"RATE_LIMITED","retry_after_ms":...}}` plus `Retry-After`. Retry the same body. `GET /judging`, `/projects`, `/rankings`, `/pool`, `/rows`, `/columns`, and `/export` are not limited.
 

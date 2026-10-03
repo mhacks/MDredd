@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 
-from app.api.deps import SessionDep, limited, require_session
+from app.api.deps import SessionDep, enforce_limit, require_session
 from app.api.errors import error_responses
 from app.models import (
     ComparisonInputModel,
@@ -38,10 +38,13 @@ def get_projects(session: SessionDep) -> list[RowModel]:
         "Both absent strikes each project and draws a new pair."
     ),
     response_description="The two projects to compare: id, Devpost URL, name, and tracks.",
-    dependencies=[limited("pair")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
 )
-def create_pair(body: PairRequestModel, session: SessionDep) -> PairModel:
+def create_pair(
+    body: PairRequestModel, request: Request, session: SessionDep
+) -> PairModel:
+    # Each judge has their own bucket, since every judge may come through one client.
+    enforce_limit(request, "pair", body.judge_id)
     left, right = session.worker.request_pair(body)
     return PairModel(
         pair=(ProjectModel.from_entity(left), ProjectModel.from_entity(right))
@@ -53,11 +56,11 @@ def create_pair(body: PairRequestModel, session: SessionDep) -> PairModel:
     response_model=ComparisonResultModel,
     description="Record the winner of this judge's open pair.",
     response_description="The comparison was recorded.",
-    dependencies=[limited("submit")],
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
 )
 def submit_comparison(
-    body: ComparisonInputModel, session: SessionDep
+    body: ComparisonInputModel, request: Request, session: SessionDep
 ) -> ComparisonResultModel:
+    enforce_limit(request, "submit", body.judge_id)
     session.worker.submit(body)
     return ComparisonResultModel(ok=True)
