@@ -44,7 +44,7 @@ Errors are JSON: `{"detail":{"code":"..."}}`. Rate limits add `retry_after_ms` a
 
 1. Upload the Devpost projects export with `POST /datasets` as multipart form data, file field `entities_csv`. The CSV must be UTF-8 with unique header names, and must have the columns `Project Title`, `Submission Url`, `M Hacks Main Track`, and `Sponsor Opt In Prizes`; a missing one is `422` `INVALID_COLUMNS` with `detail.names`. Rows with an empty `Submission Url` (drafts) are dropped, and at least two must remain. Columns with a blank header, which spreadsheet apps add when they re-save the export, are dropped. Devpost headers only the first team member, so cells past the last header are dropped and short rows are padded with empty strings. Row ids are the zero-based index among the kept rows. Cell values are returned later as strings.
 
-   Before storing anything, the upload follows each `Submission Url` to the public page it redirects to and stores it on that row as a `Project Url` column, which is appended to the headers. Every hop must stay on `https` `devpost.com`. If any row does not resolve, nothing is stored and the upload is `502` `DEVPOST_UNRESOLVED` with `detail.failures`, one `{ "title", "submission_url", "code" }` per failed row. `code` is `INVALID_DEVPOST_URL`, `DEVPOST_LOGIN_REQUIRED`, `DEVPOST_NOT_FOUND`, `DEVPOST_REDIRECTED_OFFSITE`, `DEVPOST_TOO_MANY_REDIRECTS`, or `DEVPOST_UNAVAILABLE`. While the hackathon's submissions are private, Devpost sends anonymous requests to its login page (`DEVPOST_LOGIN_REQUIRED`); set `MDREDD_DEVPOST_COOKIE` to the `Cookie` header of an organizer's logged-in Devpost session to resolve them anyway. Resolution makes one request per row, `MDREDD_DEVPOST_CONCURRENCY` at a time, so a large upload can take a while.
+   Before storing anything, the upload follows each `Submission Url` to the public page it redirects to and stores it on that row as a `Project Url` column, which is appended to the headers. Every hop must stay on `https` `devpost.com`. If any row does not resolve, nothing is stored and the upload is `422` `DEVPOST_UNRESOLVED` with `detail.failures`, one `{ "title", "submission_url", "code" }` per failed row. `code` is `INVALID_DEVPOST_URL`, `DEVPOST_LOGIN_REQUIRED`, `DEVPOST_NOT_FOUND`, `DEVPOST_REDIRECTED_OFFSITE`, `DEVPOST_TOO_MANY_REDIRECTS`, or `DEVPOST_UNAVAILABLE`. While the hackathon's submissions are private, Devpost sends anonymous requests to its login page (`DEVPOST_LOGIN_REQUIRED`); set `MDREDD_DEVPOST_COOKIE` to the `Cookie` header of an organizer's logged-in Devpost session to resolve them anyway. Resolution makes one request per row, `MDREDD_DEVPOST_CONCURRENCY` at a time, so a large upload can take a while.
 2. A successful upload is `201` and turns judging on:
 
    ```json
@@ -140,7 +140,7 @@ If the judge worker is dead, stuck, or its queue is full, the call is `503` `WOR
 | 409 | `POOL_EXHAUSTED` | Fewer than two projects are still active |
 | 422 | `TOO_FEW_ENTITIES` | CSV has fewer than two rows |
 | 422 | `INVALID_COLUMNS` | Headers are duplicated, all blank, or unreadable, or a required column is missing. `detail.names` lists the bad headers when known |
+| 422 | `DEVPOST_UNRESOLVED` | Some submission URLs did not resolve. `detail.failures` lists them |
 | 422 | `INCORRECT_PAIR_FORMAT` | Winner is not one of the two ids |
 | 429 | `RATE_LIMITED` | Shared bucket is empty |
-| 502 | `DEVPOST_UNRESOLVED` | Some submission URLs did not resolve. `detail.failures` lists them |
 | 503 | `WORKER_UNAVAILABLE` | Judge worker cannot accept the command |
