@@ -7,7 +7,7 @@ from typing import Literal
 from app.settings import settings
 
 Bucket = tuple[float, float]
-Operation = Literal["admin", "pair", "submit"]
+Operation = Literal["admin", "pair", "submit", "tables"]
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,8 @@ def _limits(operation: Operation) -> tuple[int, float]:
             return settings.SUBMIT_CAPACITY, settings.SUBMIT_REFILL_PER_SECOND
         case "admin":
             return settings.ADMIN_CAPACITY, settings.ADMIN_REFILL_PER_SECOND
+        case "tables":
+            return settings.TABLES_CAPACITY, settings.TABLES_REFILL_PER_SECOND
 
 
 limiter = TokenBucket()

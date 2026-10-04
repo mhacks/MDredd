@@ -56,7 +56,7 @@ Errors are JSON: `{"detail":{"code":"..."}}`. Rate limits add `retry_after_ms` a
 4. `GET /pool` lists every project in upload order: `id`, `attributes`, `strikes`, and `removed`. `removed` is true once `strikes` reaches the strike limit. `POST /pool/{id}/restore` clears that project's strikes and returns it to the draw. Restoring a project that is still active succeeds and changes nothing.
 5. `GET /projects` lists every project in upload order. The response is ids and attributes only. Before any dataset exists the list is empty. `GET /rankings` returns every row, strongest first, with the same shape. Rankings stay readable after stop. Before any dataset exists they are `409` `JUDGING_NEVER_STARTED`. `GET /columns` lists headers. `GET /rows/{id}` returns one row, or `404` `UNKNOWN_ROW`.
 6. `POST /archive` moves the SQLite database and the log file into a new folder under `archive/` and starts empty. Each call keeps the earlier folders. The response `path` is that folder's name. `GET /archives` lists those names, newest first, and `GET /archives/{id}` downloads that folder as a zip. An unknown id is `404` `UNKNOWN_ARCHIVE`. Judging is off. If startup cannot read the file, it logs that and keeps serving. Other routes are `503` `DATABASE_UNREADABLE` until `POST /archive`.
-7. `PUT /tables` with `{"tables": {"https://devpost.com/software/project-a": 12, ...}}` replaces the whole project URL to table number mapping. Build it from each team's saved Devpost link and reserved table. Table numbers must be positive. URLs match a project's `Project Url` ignoring case, `www.`, a trailing slash, the query, and the scheme. The response is `{ "stored": 2, "unknown_urls": [...] }`, where `unknown_urls` are the sent URLs that match no uploaded project. The mapping is kept in SQLite and survives a new upload, so send it again whenever a team changes tables. Send `{"tables": {}}` to clear it.
+7. `PUT /tables` with `{"tables": {"https://devpost.com/software/project-a": 12, ...}}` replaces the whole project URL to table number mapping. Build it from each team's saved Devpost link and reserved table. Table numbers must be positive. URLs match a project's `Project Url` ignoring case, `www.`, a trailing slash, the query, and the scheme. The response is `{ "stored": 2, "unknown_urls": [...] }`, where `unknown_urls` are the sent URLs that match no uploaded project. The mapping is kept in SQLite and survives a new upload, so send it again whenever a team changes tables. Send `{"tables": {}}` to clear it. **Only projects with a table are drawn for judges**, so until the mapping is sent, `POST /pairs` is `409` `POOL_EXHAUSTED`. A pair a judge already holds is still returned if one of its projects loses its table.
 8. `GET /export` downloads every project in upload order as `projects.csv`: `id`, every stored column (including `Project Url`), then `Table Number`, which is empty when no table is mapped to that project.
 
 ## Judge flow
@@ -122,7 +122,8 @@ Drawing a pair is separate from strength. Each draw increments an appearance cou
 |---|---|---|---|
 | `POST /pairs` | each judge | 6 | about 1 every 5 seconds |
 | `POST /comparisons` | each judge | 2 | about 1 per minute |
-| Admin writes (upload, start, stop, restore, tables) | everyone | 4 | about 1 every 30 seconds |
+| Admin writes (upload, start, stop, restore) | everyone | 4 | about 1 every 30 seconds |
+| `PUT /tables` | everyone | 30 | about 1 per second |
 
 `429` is `{"detail":{"code":"RATE_LIMITED","retry_after_ms":...}}` plus `Retry-After`. Retry the same body. `GET /judging`, `/projects`, `/rankings`, `/pool`, `/rows`, `/columns`, and `/export` are not limited.
 
@@ -137,7 +138,7 @@ If the judge worker is dead, stuck, or its queue is full, the call is `503` `WOR
 | 409 | `JUDGING_NEVER_STARTED` | No dataset has been stored |
 | 409 | `JUDGE_DOES_NOT_OWN_PAIR` | Comparison does not match this judge's open pair |
 | 409 | `ABSENT_NOT_IN_PAIR` | Absence ids are not the current pair |
-| 409 | `POOL_EXHAUSTED` | Fewer than two projects are still active |
+| 409 | `POOL_EXHAUSTED` | Fewer than two projects are still active and have a table |
 | 422 | `TOO_FEW_ENTITIES` | CSV has fewer than two rows |
 | 422 | `INVALID_COLUMNS` | Headers are duplicated, all blank, or unreadable, or a required column is missing. `detail.names` lists the bad headers when known |
 | 422 | `DEVPOST_UNRESOLVED` | Some submission URLs did not resolve. `detail.failures` lists them |

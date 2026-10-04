@@ -388,7 +388,7 @@ class JudgeWorker:
         exclude: tuple[int, ...],
         absent_key: tuple[int, ...] | None = None,
     ) -> tuple[EntityWithId, EntityWithId]:
-        mask = _active_mask(self._strikes, exclude)
+        mask = self._drawable_mask(self._strikes, exclude)
         if int(mask.sum()) < 2:
             raise PoolExhaustedException()
         bdp = self._require_bdp()
@@ -483,7 +483,7 @@ class JudgeWorker:
         ]
         assignment_updates: dict[str, tuple[int, int] | None] = {}
         exclude = absent_key if len(absent_key) == 2 else ()
-        mask = _active_mask(strikes, exclude)
+        mask = self._drawable_mask(strikes, exclude)
         new_pair = None
         if int(mask.sum()) < 2:
             assignment_updates[judge_id] = None
@@ -576,6 +576,21 @@ class JudgeWorker:
             )
             for index, entity in enumerate(self._entities)
         ]
+
+    def _drawable_mask(
+        self, strikes: list[int], exclude: tuple[int, ...] = ()
+    ) -> np.ndarray:
+        """Projects that may be drawn: not struck out, and with a table.
+
+        A project with no table in the mapping from PUT /tables has nowhere
+        for a judge to go, so it is left out until a table is mapped to it.
+        """
+        mask = _active_mask(strikes, exclude)
+        seated = np.array(
+            [self._table_for(entity) is not None for entity in self._entities],
+            dtype=bool,
+        )
+        return mask & seated
 
     def _table_for(self, entity: Entity) -> int | None:
         key = project.normalize_url(entity.attributes.get(project.PROJECT_URL, ""))

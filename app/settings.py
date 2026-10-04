@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     SUBMIT_REFILL_PER_SECOND: float = 1 / 60
     ADMIN_CAPACITY: int = 4
     ADMIN_REFILL_PER_SECOND: float = 1 / 30
+    # The dashboard re-sends tables whenever assignments change, so table
+    # syncs have their own, looser bucket.
+    TABLES_CAPACITY: int = 30
+    TABLES_REFILL_PER_SECOND: float = 1.0
     WORKER_TIMEOUT_SECONDS: float = 10
     WORKER_STUCK_SECONDS: float = 30
     WORKER_QUEUE_SIZE: int = 8
