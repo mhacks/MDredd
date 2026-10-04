@@ -35,12 +35,22 @@ class Session:
     def start(self, entity_csv: bytes) -> list[str]:
         headers, entities = Entity.list_from_csv(entity_csv)
         entities = project.submitted(headers, entities)
+        # A Project Url column, filled in ahead of time, saves those rows a
+        # Devpost request. It is moved to the end like a resolved one.
+        known = [
+            entity.attributes.get(project.PROJECT_URL, "").strip()
+            for entity in entities
+        ]
+        headers = [name for name in headers if name != project.PROJECT_URL]
+        entities = [project.without_project_url(entity) for entity in entities]
         # Answer a repeat or a conflict before spending a Devpost request per row.
         current = self.worker.check_replaceable(entities, headers)
         if current is not None:
             return current
         # Resolve here, off the worker thread, which would time out on Devpost.
-        entities = project.with_project_urls(entities)
+        entities = project.with_project_urls(
+            entities, known, settings.DEVPOST_COOKIE, settings.DEVPOST_CONCURRENCY
+        )
         return self.worker.replace_entities(entities, [*headers, project.PROJECT_URL])
 
     def _watch(self) -> None:

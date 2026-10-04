@@ -24,3 +24,6 @@ typeCheckingMode = "standard"
 dev = [
     "pandas-stubs>=3.0.5.260914",
 ]
+preprocess = [
+    "playwright>=1.63.0",
+]
