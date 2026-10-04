@@ -73,9 +73,13 @@ def without_project_url(entity: Entity) -> Entity:
 
 
 def tracks(attributes: dict[str, str]) -> list[str]:
-    # Devpost writes the opted-in prizes as a list: "A, B, and C".
-    prizes = attributes.get(SPONSOR_PRIZES, "").split(", ")
+    # Devpost writes the opted-in prizes as a list: "A", "A and B", or
+    # "A, B, and C".
+    listed = attributes.get(SPONSOR_PRIZES, "")
+    prizes = listed.split(", ")
     if len(prizes) > 1:
         prizes[-1] = prizes[-1].removeprefix("and ")
+    else:
+        prizes = listed.split(" and ")
     named = [attributes.get(MAIN_TRACK, ""), *prizes]
     return [track.strip() for track in named if track.strip()]
