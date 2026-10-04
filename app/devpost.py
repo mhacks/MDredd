@@ -3,8 +3,6 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from app.settings import settings
-
 MAX_REDIRECTS = 10
 TIMEOUT_SECONDS = 10
 # Devpost sits behind Cloudflare, which rejects bare or library user agents.
@@ -31,10 +29,11 @@ def is_devpost_url(url: str) -> bool:
     )
 
 
-def _is_login_page(url: str) -> bool:
+def is_login_page(url: str) -> bool:
+    # Devpost sends signed-out visitors to /users/login or /users/register.
     parts = urlsplit(url)
     return parts.hostname == "secure.devpost.com" and parts.path.startswith(
-        "/users/login"
+        ("/users/login", "/users/register")
     )
 
 
@@ -49,7 +48,7 @@ def resolve(client: httpx.Client, url: str) -> str:
     current = url
     try:
         for _ in range(MAX_REDIRECTS + 1):
-            if _is_login_page(current):
+            if is_login_page(current):
                 raise DevpostError("DEVPOST_LOGIN_REQUIRED")
             with client.stream("GET", current) as response:
                 if response.is_redirect:
@@ -67,11 +66,16 @@ def resolve(client: httpx.Client, url: str) -> str:
     raise DevpostError("DEVPOST_TOO_MANY_REDIRECTS")
 
 
-def resolve_all(urls: list[str]) -> list[str | DevpostError]:
-    """Resolve each link, in order. A failed link is its DevpostError."""
+def resolve_all(
+    urls: list[str], cookie: str, concurrency: int
+) -> list[str | DevpostError]:
+    """Resolve each link, in order. A failed link is its DevpostError.
+
+    `cookie` is sent to Devpost when set, so private submissions resolve.
+    """
     headers = {"User-Agent": USER_AGENT}
-    if settings.DEVPOST_COOKIE:
-        headers["Cookie"] = settings.DEVPOST_COOKIE
+    if cookie:
+        headers["Cookie"] = cookie
 
     with httpx.Client(
         headers=headers, timeout=TIMEOUT_SECONDS, follow_redirects=False
@@ -83,5 +87,5 @@ def resolve_all(urls: list[str]) -> list[str | DevpostError]:
             except DevpostError as exc:
                 return exc
 
-        with ThreadPoolExecutor(max_workers=settings.DEVPOST_CONCURRENCY) as pool:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
             return list(pool.map(attempt, urls))

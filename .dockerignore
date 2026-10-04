@@ -18,3 +18,5 @@ tests
 *.pdf
 
 .pytest_cache
+
+.devpost-profile
