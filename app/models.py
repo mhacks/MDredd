@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app import project
 from app.entity import Entity
@@ -19,6 +19,14 @@ class ComparisonInputModel(BaseModel):
 class PairRequestModel(BaseModel):
     judge_id: str = Field(min_length=1)
     absent: list[int] = Field(default_factory=list, max_length=2)
+    # The open pair to give up unjudged, e.g. when the judge's timer runs out.
+    skip: tuple[int, int] | None = None
+
+    @model_validator(mode="after")
+    def one_action(self) -> PairRequestModel:
+        if self.skip is not None and self.absent:
+            raise ValueError("Send either absent or skip, not both")
+        return self
 
 
 class PoolEntryModel(BaseModel):
@@ -87,6 +95,10 @@ class ProjectModel(BaseModel):
 
 class PairModel(BaseModel):
     pair: tuple[ProjectModel, ProjectModel]
+    # Unix time the pair was handed out, and MDredd's clock when it answered,
+    # so a client can time the pair without trusting its own clock.
+    assigned_at: float
+    server_time: float
 
 
 class ComparisonResultModel(BaseModel):

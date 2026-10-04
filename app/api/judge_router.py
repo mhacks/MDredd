@@ -1,3 +1,5 @@
+import time
+
 from fastapi import APIRouter, Depends, Request, status
 
 from app.api.deps import SessionDep, enforce_limit, require_session
@@ -35,7 +37,8 @@ def get_projects(session: SessionDep) -> list[RowModel]:
     description=(
         "Draw this judge's open pair, or return the pair they already hold. "
         "One absent project from that pair forfeits, and the other project wins. "
-        "Both absent strikes each project and draws a new pair."
+        "Both absent strikes each project and draws a new pair. "
+        "skip gives up the open pair unjudged and draws a new one."
     ),
     response_description="The two projects to compare: id, Devpost URL, name, and tracks.",
     responses=error_responses(status.HTTP_409_CONFLICT, limited=True),
@@ -45,9 +48,11 @@ def create_pair(
 ) -> PairModel:
     # Each judge has their own bucket, since every judge may come through one client.
     enforce_limit(request, "pair", body.judge_id)
-    left, right = session.worker.request_pair(body)
+    left, right, assigned_at = session.worker.request_pair(body)
     return PairModel(
-        pair=(ProjectModel.from_entity(left), ProjectModel.from_entity(right))
+        pair=(ProjectModel.from_entity(left), ProjectModel.from_entity(right)),
+        assigned_at=assigned_at,
+        server_time=time.time(),
     )
 
 

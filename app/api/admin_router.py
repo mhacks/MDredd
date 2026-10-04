@@ -208,7 +208,7 @@ def restore_pool_entity(entity_id: int, session: SessionDep) -> PoolEntryModel:
         "each project's Project Url, ignoring case, www, a trailing slash, and the query."
     ),
     response_description="How many entries are stored, and the URLs that match no project.",
-    dependencies=[limited("admin")],
+    dependencies=[limited("tables")],
     responses=error_responses(limited=True),
 )
 def put_tables(body: TablesInputModel, session: SessionDep) -> TablesModel:
