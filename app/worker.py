@@ -22,6 +22,7 @@ from app.db import (
     save_absence,
     save_assignment,
     save_comparison,
+    save_skip,
     save_enabled,
     save_strikes,
     save_tables,
@@ -104,6 +105,7 @@ class JudgeWorker:
         self.headers: list[str] = []
         self._entities: list[Entity] = []
         self._assignments: dict[str, tuple[int, int]] = {}
+        self._assigned_at: dict[str, float] = {}
         self._completed: dict[str, tuple[int, int, int]] = {}
         self._strikes: list[int] = []
         self._last_skips: dict[str, AbsentSkip] = {}
@@ -166,8 +168,15 @@ class JudgeWorker:
 
     def request_pair(
         self, pair_request: PairRequestModel
-    ) -> tuple[EntityWithId, EntityWithId]:
-        return self._call(lambda: self._get_pair(pair_request))
+    ) -> tuple[EntityWithId, EntityWithId, float]:
+        """The judge's pair and the Unix time it was handed out."""
+
+        def job() -> tuple[EntityWithId, EntityWithId, float]:
+            left, right = self._get_pair(pair_request)
+            assigned_at = self._assigned_at.get(pair_request.judge_id, time.time())
+            return left, right, assigned_at
+
+        return self._call(job)
 
     def submit(self, comparison: ComparisonInputModel) -> None:
         self._call(lambda: self._submit(comparison))
@@ -318,6 +327,8 @@ class JudgeWorker:
     ) -> tuple[EntityWithId, EntityWithId]:
         if not self.enabled:
             raise JudgingNotStartedException()
+        if pair_request.skip is not None:
+            return self._skip(pair_request.judge_id, pair_request.skip)
         if pair_request.absent:
             return self._report_absence(pair_request.judge_id, pair_request.absent)
         assigned = self._assignments.get(pair_request.judge_id)
@@ -371,6 +382,7 @@ class JudgeWorker:
         for entity_id, strike_count in strike_counts:
             self._strikes[entity_id] = strike_count
         del self._assignments[judge]
+        self._assigned_at.pop(judge, None)
         self._completed[judge] = completed
         logger.info(
             "Applied comparison",
@@ -394,8 +406,9 @@ class JudgeWorker:
         bdp = self._require_bdp()
         left, right, frequency, key = bdp.propose_pair(mask)
         pair = (left, right)
+        now = time.time()
         if absent_key is None:
-            save_assignment(frequency, key, judge_id, pair)
+            save_assignment(frequency, key, judge_id, pair, now)
         else:
             save_absence(
                 frequency,
@@ -407,10 +420,12 @@ class JudgeWorker:
                 judge_id,
                 absent_key,
                 pair,
+                now,
             )
         bdp.frequency = frequency
         bdp.key = key
         self._assignments[judge_id] = pair
+        self._assigned_at[judge_id] = now
         if absent_key is not None:
             self._last_skips[judge_id] = (absent_key, pair)
         return self._pair(*pair)
@@ -497,6 +512,7 @@ class JudgeWorker:
         completed = None
         if ordered is not None and winner_id is not None:
             completed = (judge_id, (*ordered, winner_id))
+        now = time.time()
         save_absence(
             frequency,
             strikes,
@@ -507,6 +523,7 @@ class JudgeWorker:
             judge_id,
             absent_key,
             new_pair,
+            now,
         )
         bdp.frequency = frequency
         bdp.key = key
@@ -516,8 +533,10 @@ class JudgeWorker:
         for other, pair in assignment_updates.items():
             if pair is None:
                 self._assignments.pop(other, None)
+                self._assigned_at.pop(other, None)
             else:
                 self._assignments[other] = pair
+                self._assigned_at[other] = now
         if completed is not None:
             self._completed[judge_id] = completed[1]
         self._last_skips[judge_id] = (absent_key, new_pair)
@@ -596,6 +615,65 @@ class JudgeWorker:
         key = project.normalize_url(entity.attributes.get(project.PROJECT_URL, ""))
         return self._tables.get(key) if key else None
 
+    def _skip(
+        self, judge_id: str, skip: tuple[int, int]
+    ) -> tuple[EntityWithId, EntityWithId]:
+        """Give up the judge's open pair unjudged and draw another.
+
+        Nothing is recorded about either project: no comparison and no
+        strike, and each gets back the appearance the draw counted. `skip`
+        names the pair being given up, so a retry after it was already
+        replaced returns the replacement instead of skipping it too.
+        """
+        skipped = (min(skip), max(skip))
+        current = self._assignments.get(judge_id)
+        if current is None or (min(current), max(current)) != skipped:
+            logger.info(
+                "Ignored stale skip",
+                extra={
+                    "event": "skip_ignored",
+                    "user_id": judge_id,
+                    "entity_ids": list(skipped),
+                },
+            )
+            if current is not None:
+                return self._pair(*current)
+            return self._draw_for(judge_id, ())
+
+        bdp = self._require_bdp()
+        frequency = bdp.frequency
+        for entity_id in skipped:
+            frequency = _refund(frequency, entity_id)
+        # A different pair if the pool allows it, otherwise any pair.
+        mask = self._drawable_mask(self._strikes, skipped)
+        if int(mask.sum()) < 2:
+            mask = self._drawable_mask(self._strikes)
+        now = time.time()
+        if int(mask.sum()) < 2:
+            save_skip(frequency, bdp.key, judge_id, None, now)
+            bdp.frequency = frequency
+            self._assignments.pop(judge_id, None)
+            self._assigned_at.pop(judge_id, None)
+            raise PoolExhaustedException()
+        left, right, frequency, key = bdp.propose_pair(
+            mask, frequency=frequency, key=bdp.key
+        )
+        pair = (left, right)
+        save_skip(frequency, key, judge_id, pair, now)
+        bdp.frequency = frequency
+        bdp.key = key
+        self._assignments[judge_id] = pair
+        self._assigned_at[judge_id] = now
+        logger.info(
+            "Skipped pair",
+            extra={
+                "event": "pair_skipped",
+                "user_id": judge_id,
+                "entity_ids": list(skipped),
+            },
+        )
+        return self._pair(*pair)
+
     def _pool(self) -> list[PoolEntryModel]:
         return [self._pool_entry(index) for index in range(len(self._entities))]
 
@@ -630,6 +708,7 @@ class JudgeWorker:
         self.headers = list(record.headers)
         self._entities = list(record.entities)
         self._assignments = dict(record.assignments)
+        self._assigned_at = dict(record.assigned_at)
         self._completed = dict(record.completed)
         self._strikes = list(record.strikes)
         self._last_skips = dict(record.last_skips)

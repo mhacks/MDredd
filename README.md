@@ -85,11 +85,17 @@ POST /pairs  →  show the two projects  →  POST /comparisons  →  POST /pair
       "tracks": ["Actually Intelligent (AI)", "Figma Best Design"]
     },
     { "id": 11, "url": "https://devpost.com/software/project-b", "name": "Project B", "tracks": [] }
-  ]
+  ],
+  "assigned_at": 1790000000.0,
+  "server_time": 1790000042.5
 }
 ```
 
 `url` is the row's `Project Url`, `name` its `Project Title`, and `tracks` its `M Hacks Main Track` followed by each prize in `Sponsor Opt In Prizes`. No other CSV column is sent to judges. Match `url` against the Devpost links teams saved to find the team and its table.
+
+`assigned_at` is the Unix time this pair was handed out, and stays the same each time the judge asks for the pair they hold, including across restarts. `server_time` is MDredd's clock when it answered, so a client can time the pair as `server_time - assigned_at` without trusting its own clock.
+
+**Skip a pair.** Call `POST /pairs` with the open pair's two ids in `skip`, for example when the judge's time runs out. Nothing is recorded about either project: no comparison, no strike, and the appearance the draw counted for each is given back. The new pair avoids both skipped projects when enough others are drawable. If `skip` no longer matches the judge's open pair, because it was already replaced, MDredd returns the current pair instead of skipping again, so a retry is safe. `skip` and `absent` cannot be sent together (`422`).
 
 **Record a winner.** `entity_ids` must be the two ids of that judge's open pair. Order does not matter. `winner_id` must be one of them.
 

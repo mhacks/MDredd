@@ -1,4 +1,5 @@
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ import numpy as np
 from peewee import (
     BlobField,
     BooleanField,
+    FloatField,
     Case,
     IntegerField,
     JSONField,
@@ -59,6 +61,8 @@ class Assignment(Model):
     judge_id = TextField(primary_key=True)
     entity_id_1 = IntegerField()
     entity_id_2 = IntegerField()
+    # Unix time the pair was handed out, for the judge's timer.
+    assigned_at = FloatField(null=True)
 
     class Meta:
         database = db
@@ -127,6 +131,8 @@ class JudgeRecord:
     headers: list[str]
     entities: list[Entity]
     assignments: dict[str, tuple[int, int]]
+    # Judge id to the Unix time their open pair was handed out.
+    assigned_at: dict[str, float]
     completed: dict[str, tuple[int, int, int]]
     strikes: list[int]
     last_skips: dict[str, AbsentSkip]
@@ -152,6 +158,7 @@ def open_db() -> None:
         ]
     )
     _migrate_strikes()
+    _migrate_assignment_time()
     _migrate_legacy_state()
 
 
@@ -267,9 +274,17 @@ def load_state() -> JudgeRecord:
             Entity(attributes=row.attributes)
             for row in EntityRow.select().order_by(EntityRow.id)
         ]
+        assignment_rows = list(Assignment.select())
         assignments = {
             row.judge_id: (row.entity_id_1, row.entity_id_2)
-            for row in Assignment.select()
+            for row in assignment_rows
+        }
+        loaded_at = time.time()
+        assigned_at = {
+            row.judge_id: float(row.assigned_at)
+            if row.assigned_at is not None
+            else loaded_at
+            for row in assignment_rows
         }
         completed = {
             row.judge_id: (row.entity_id_1, row.entity_id_2, row.winner_id)
@@ -285,6 +300,7 @@ def load_state() -> JudgeRecord:
                 headers=[],
                 entities=entities,
                 assignments=assignments,
+            assigned_at=assigned_at,
                 completed=completed,
                 strikes=strikes,
                 last_skips=last_skips,
@@ -297,6 +313,7 @@ def load_state() -> JudgeRecord:
             headers=list(judge.headers),
             entities=entities,
             assignments=assignments,
+            assigned_at=assigned_at,
             completed=completed,
             strikes=strikes,
             last_skips=last_skips,
@@ -313,6 +330,7 @@ def replace_state(
         headers=list(headers),
         entities=list(entities),
         assignments={},
+        assigned_at={},
         completed={},
         strikes=[0] * len(entities),
         last_skips={},
@@ -359,7 +377,11 @@ def replace_state(
 
 
 def save_assignment(
-    frequency: Any, key: Any, judge_id: str, pair: tuple[int, int]
+    frequency: Any,
+    key: Any,
+    judge_id: str,
+    pair: tuple[int, int],
+    assigned_at: float,
 ) -> None:
     left, right = pair
     stored_frequency = np.asarray(frequency)
@@ -388,6 +410,7 @@ def save_assignment(
             judge_id=judge_id,
             entity_id_1=left,
             entity_id_2=right,
+            assigned_at=assigned_at,
         ).execute()
 
 
@@ -443,6 +466,7 @@ def save_absence(
     judge_id: str,
     absent_ids: tuple[int, ...],
     pair: tuple[int, int] | None,
+    assigned_at: float,
 ) -> None:
     stored_frequency = np.asarray(frequency)
     if stored_frequency.shape != (len(strikes),):
@@ -476,6 +500,7 @@ def save_absence(
                 judge_id=assigned_judge,
                 entity_id_1=left,
                 entity_id_2=right,
+                assigned_at=assigned_at,
             ).execute()
         if completed is not None:
             completed_judge, (entity_id_1, entity_id_2, winner_id) = completed
@@ -503,6 +528,42 @@ def save_tables(tables: dict[str, int]) -> None:
                     for url, number in tables.items()
                 ]
             ).execute()
+
+
+def save_skip(
+    frequency: Any,
+    key: Any,
+    judge_id: str,
+    pair: tuple[int, int] | None,
+    assigned_at: float,
+) -> None:
+    """Store a skipped pair's refund and the judge's next pair, if any."""
+    stored_frequency = np.asarray(frequency)
+    with db.atomic():
+        for index, count in enumerate(stored_frequency):
+            updated = (
+                EntityState.update(frequency=int(count))
+                .where(EntityState.entity_id == index)
+                .execute()
+            )
+            if updated != 1:
+                raise RuntimeError("Entity state is missing")
+        updated = (
+            JudgeState.update(key=_array_bytes(key, np.dtype("<u4")))
+            .where(JudgeState.id == 1)
+            .execute()
+        )
+        if updated != 1:
+            raise RuntimeError("Judge state is missing")
+        if pair is None:
+            Assignment.delete().where(Assignment.judge_id == judge_id).execute()
+            return
+        Assignment.replace(
+            judge_id=judge_id,
+            entity_id_1=pair[0],
+            entity_id_2=pair[1],
+            assigned_at=assigned_at,
+        ).execute()
 
 
 def save_enabled(enabled: bool) -> None:
@@ -580,6 +641,16 @@ def _migrate_strikes() -> None:
     db.execute_sql(
         "ALTER TABLE entity_state ADD COLUMN strikes INTEGER NOT NULL DEFAULT 0"
     )
+
+
+def _migrate_assignment_time() -> None:
+    # Pairs handed out before this column existed load as handed out at startup.
+    if "assignments" not in db.get_tables():
+        return
+    names = {column.name for column in db.get_columns("assignments")}
+    if "assigned_at" in names:
+        return
+    db.execute_sql("ALTER TABLE assignments ADD COLUMN assigned_at REAL")
 
 
 def _migrate_legacy_state() -> None:
